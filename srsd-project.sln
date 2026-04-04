@@ -1,0 +1,16 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "srsd-project", "srsd-project\srsd-project.csproj", "{C8ADC310-7C36-41D3-95E8-C828B2818D2E}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{C8ADC310-7C36-41D3-95E8-C828B2818D2E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C8ADC310-7C36-41D3-95E8-C828B2818D2E}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C8ADC310-7C36-41D3-95E8-C828B2818D2E}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C8ADC310-7C36-41D3-95E8-C828B2818D2E}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal
