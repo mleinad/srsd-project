@@ -7,9 +7,6 @@ class Program
 {
     static void Main(string[] args)
     {
-        GalleryState galleryState = new GalleryState();
-        galleryState.CheckState();
-        
         var parser = new LogParser();
         
         bool tokenFlag = false;
@@ -21,87 +18,161 @@ class Program
         bool arrival_flag= false;
         bool departure_flag = false;
         string? room_id= null;
-        bool log = false;
+        string? log_file = null;
         
 
 
         for (int i = 0; i < args.Length; i++)
         {
+            // Helper to safely get the next argument without crashing
+            string GetNext() => (i + 1 < args.Length) ? args[++i] : null;
+            
             switch (args[i])
             {
                 case "-K":
-                    // Do whatever you need to do for -K
-                    if (ValidToken(args[i+1]))
-                        tokenFlag = true; // This one is mandatory so check if its included
+                    string token = GetNext();
+                    if (token != null && Regex.IsMatch(token, "^[a-zA-Z0-9]+$")) // Tokens are alphanumeric
+                    {
+                        tokenFlag = true;
+                    }
+                    else
+                    {
+                        validLog = false;
+                    }
                     break;
                 
                 case "-T":
-                    timestamp = int.Parse(args[i+1]);
-                    //Check if timestamp > lastRecordedTimestamp
+                    string tStr = GetNext();
+                    if (tStr == null || !int.TryParse(tStr, out timestamp) || timestamp < 1 || timestamp > 1073741823)
+                    {
+                        validLog = false; // Must be valid integer in range
+                    }
                     break;
 
                 case "-E":
-                    employee_name = args[i + 1];
-                    if (guest_name != null)
-                        validLog = false;
-                    validLog = Regex.IsMatch(employee_name, @"^[a-zA-Z0-9]+$");
+                    employee_name = GetNext();
+                    if (employee_name == null || guest_name != null || !Regex.IsMatch(employee_name, "^[a-zA-Z]+$"))
+                    {
+                        validLog = false; // Fixed regex: alphabetic only
+                    }
                     break;
                 
                 case "-G":
-                    guest_name = args[i+1];
-                    if (employee_name != null)
-                        validLog = false;
-                    validLog = Regex.IsMatch(guest_name, @"^[a-zA-Z0-9]+$");
+                    guest_name = GetNext();
+                    if (guest_name == null || employee_name != null || !Regex.IsMatch(guest_name, "^[a-zA-Z]+$")) {
+                        validLog = false; // Fixed regex: alphabetic only
+}
                     break;
                 
                 case "-A":
                     arrival_flag = true;
-                    if (departure_flag == true)
+                    if (departure_flag)
+                    {
                         validLog = false;
+                    }
                     break;
                 
                 case "-L":
                     departure_flag = true;
-                    if (arrival_flag == true)
+                    if (arrival_flag)
+                    {
                         validLog = false;
+                    }
                     break;
                 
                 case "-R":
-                    room_id = args[i+1];
-                    break;
-                
-                case "log":
-                    log = true;
+                    room_id = GetNext();
+                    if (room_id == null || !Regex.IsMatch(room_id, "^[0-9]+$"))
+                    {
+                        validLog = false;
+                    }
                     break;
                 
                 case "-B":
-                    // Do whatever you need to do for -B
-                    //valueB = args[++i]; // if -b expects a value after it
+                    // Batch processing
+                    string batch_file = GetNext();
+                    if (batch_file == null)
+                    {
+                        validLog = false;
+                    }
                     break;
-
+                
                 default:
-                    Console.WriteLine($"Unknown flag: {args[i]}");
+                    // If it doesn't start with '-', it's the log file name
+                    if (!args[i].StartsWith("-") && log_file == null)
+                    {
+                        log_file = args[i];
+                    }
+                    else
+                    {
+                        validLog = false; // Unknown flag or multiple log files
+                    }
+
                     break;
             }
+        }
+        
+        if (log_file == null || !tokenFlag || (!arrival_flag && !departure_flag) || (employee_name == null && guest_name == null))
+        {
+            validLog = false;
         }
 
         if (!validLog)
         {
-            Console.Error.WriteLine("The arguments provided are invalid.");
+            Console.WriteLine("invalid"); // MUST be exactly this string
+            Environment.Exit(111);        // MUST exit 111
+        }
+        
+        try
+        {
+            GalleryState state = new GalleryState();
+            
+            // TODO: Read existing log_file, decrypt, and rebuild state history first!
+            
+            EPersonType type;
+            string name;
+
+            if (employee_name != null)
+            {
+                type = EPersonType.Employee;
+                name = employee_name;
+            }
+            else
+            {
+                type = EPersonType.Guest;
+                name = guest_name;
+            }
+            
+            //NOTE: I think we could do some sort of exploit here with allowing a user to be an EmployeeGuest or something  
+            int? parsedRoomId = null;
+            if (room_id != null)
+            {
+                parsedRoomId = int.Parse(room_id);
+            }
+
+            state.ApplyEvent(timestamp, name, type, arrival_flag, parsedRoomId);
+            // TODO: Write encrypted event to log_file
+            
+            Environment.Exit(0); // Success!
+        }
+        catch (Exception)
+        {
+            // If ApplyEvent throws an exception (e.g. time didn't increase, person isn't in gallery)
+            Console.WriteLine("invalid");
             Environment.Exit(111);
         }
-
-        Console.WriteLine($"The user {(tokenFlag ? "provided" : "did NOT provide")} a token");
     }
     
     static bool ValidToken(string t)
     {
         //TODO
+        return true;
     }
     
     static bool ValidLog(string t)
     {
         //TODO
+        return true;
     }
     
     static LogEvent LogGenerator
@@ -116,6 +187,7 @@ class Program
     )
     {
         //TODO
+        return null;
     }
 }
 
