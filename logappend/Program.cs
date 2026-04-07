@@ -1,0 +1,12 @@
+﻿using GalleryCore;
+
+namespace logappend;
+class Program
+{
+    static void Main(string[] args)
+    {
+        GalleryState galleryState = new GalleryState();
+        galleryState.CheckState();
+        Console.WriteLine("Hello, World!");
+    }
+}

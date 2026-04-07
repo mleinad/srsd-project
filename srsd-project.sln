@@ -1,6 +1,10 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "srsd-project", "srsd-project\srsd-project.csproj", "{C8ADC310-7C36-41D3-95E8-C828B2818D2E}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "logread", "logread\logread.csproj", "{C8ADC310-7C36-41D3-95E8-C828B2818D2E}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GalleryCore", "GalleryCore\GalleryCore.csproj", "{09831735-08A3-4939-8604-DA5869FD036B}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "logappend", "logappend\logappend.csproj", "{B8367540-53F5-486D-9A98-08136FA47C80}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -12,5 +16,13 @@ Global
 		{C8ADC310-7C36-41D3-95E8-C828B2818D2E}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{C8ADC310-7C36-41D3-95E8-C828B2818D2E}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{C8ADC310-7C36-41D3-95E8-C828B2818D2E}.Release|Any CPU.Build.0 = Release|Any CPU
+		{09831735-08A3-4939-8604-DA5869FD036B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{09831735-08A3-4939-8604-DA5869FD036B}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{09831735-08A3-4939-8604-DA5869FD036B}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{09831735-08A3-4939-8604-DA5869FD036B}.Release|Any CPU.Build.0 = Release|Any CPU
+		{B8367540-53F5-486D-9A98-08136FA47C80}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B8367540-53F5-486D-9A98-08136FA47C80}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B8367540-53F5-486D-9A98-08136FA47C80}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B8367540-53F5-486D-9A98-08136FA47C80}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal
