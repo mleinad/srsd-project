@@ -151,6 +151,9 @@ class Program
 
         for (int i = 0; i < args.Length; i++)
         {
+            // Helper to safely get the next argument without crashing
+            string GetNext() => (i + 1 < args.Length) ? args[++i] : null;
+            
             switch (args[i])
             {
                 case "-K":
@@ -190,6 +193,11 @@ class Program
                         throw new InvalidOperationException();
                     break;
             }
+        }
+        
+        if (log_file == null || !tokenFlag || (!arrival_flag && !departure_flag) || (employee_name == null && guest_name == null))
+        {
+            validLog = false;
         }
 
         ValidateAndAppend(token, timestamp, employeeName, guestName,
