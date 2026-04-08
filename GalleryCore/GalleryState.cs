@@ -2,7 +2,7 @@
 
 public class GalleryState
 {
-public int LastTimestamp { get; private set; } = -1;
+    public int LastTimestamp { get; private set; } = -1;
     public Dictionary<string, Person> People { get; } = new();
 
     public void ApplyEvent(int timestamp, string name, EPersonType type, bool isArrival, int? roomId)

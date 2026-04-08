@@ -3,191 +3,297 @@ using GalleryCore.IO;
 using System.Text.RegularExpressions;
 
 namespace logappend;
+
 class Program
 {
     static void Main(string[] args)
     {
         var parser = new LogParser();
-        
-        bool tokenFlag = false;
-        bool validLog = true;
 
-        int timestamp = 0;
-        string? employee_name= null;
-        string? guest_name = null;
-        bool arrival_flag= false;
-        bool departure_flag = false;
-        string? room_id= null;
-        string? log_file = null;
-        
+        // ── Parsed arguments ──────────────────────────────────────────
+        string? token         = null;
+        int?    timestamp     = null;
+        string? employeeName  = null;
+        string? guestName     = null;
+        bool    arrivalFlag   = false;
+        bool    departureFlag = false;
+        string? roomId        = null;
+        string? logPath       = null;
+        string? batchFile     = null;
 
-
+        // ── Parse flags ───────────────────────────────────────────────
         for (int i = 0; i < args.Length; i++)
         {
-            // Helper to safely get the next argument without crashing
-            string GetNext() => (i + 1 < args.Length) ? args[++i] : null;
-            
             switch (args[i])
             {
                 case "-K":
-                    string token = GetNext();
-                    if (token != null && Regex.IsMatch(token, "^[a-zA-Z0-9]+$")) // Tokens are alphanumeric
-                    {
-                        tokenFlag = true;
-                    }
-                    else
-                    {
-                        validLog = false;
-                    }
+                    if (i + 1 >= args.Length) InvalidExit();
+                    token = args[++i];
                     break;
-                
+
                 case "-T":
-                    string tStr = GetNext();
-                    if (tStr == null || !int.TryParse(tStr, out timestamp) || timestamp < 1 || timestamp > 1073741823)
-                    {
-                        validLog = false; // Must be valid integer in range
-                    }
+                    if (i + 1 >= args.Length) InvalidExit();
+                    if (!int.TryParse(args[++i], out int ts)) InvalidExit();
+                    timestamp = ts;
                     break;
 
                 case "-E":
-                    employee_name = GetNext();
-                    if (employee_name == null || guest_name != null || !Regex.IsMatch(employee_name, "^[a-zA-Z]+$"))
-                    {
-                        validLog = false; // Fixed regex: alphabetic only
-                    }
+                    if (i + 1 >= args.Length) InvalidExit();
+                    employeeName = args[++i];
                     break;
-                
-                case "-G":
-                    guest_name = GetNext();
-                    if (guest_name == null || employee_name != null || !Regex.IsMatch(guest_name, "^[a-zA-Z]+$")) {
-                        validLog = false; // Fixed regex: alphabetic only
-}
-                    break;
-                
-                case "-A":
-                    arrival_flag = true;
-                    if (departure_flag)
-                    {
-                        validLog = false;
-                    }
-                    break;
-                
-                case "-L":
-                    departure_flag = true;
-                    if (arrival_flag)
-                    {
-                        validLog = false;
-                    }
-                    break;
-                
-                case "-R":
-                    room_id = GetNext();
-                    if (room_id == null || !Regex.IsMatch(room_id, "^[0-9]+$"))
-                    {
-                        validLog = false;
-                    }
-                    break;
-                
-                case "-B":
-                    // Batch processing
-                    string batch_file = GetNext();
-                    if (batch_file == null)
-                    {
-                        validLog = false;
-                    }
-                    break;
-                
-                default:
-                    // If it doesn't start with '-', it's the log file name
-                    if (!args[i].StartsWith("-") && log_file == null)
-                    {
-                        log_file = args[i];
-                    }
-                    else
-                    {
-                        validLog = false; // Unknown flag or multiple log files
-                    }
 
+                case "-G":
+                    if (i + 1 >= args.Length) InvalidExit();
+                    guestName = args[++i];
+                    break;
+
+                case "-A":
+                    arrivalFlag = true;
+                    break;
+
+                case "-L":
+                    departureFlag = true;
+                    break;
+
+                case "-R":
+                    if (i + 1 >= args.Length) InvalidExit();
+                    roomId = args[++i];
+                    break;
+
+                case "-B":
+                    if (i + 1 >= args.Length) InvalidExit();
+                    batchFile = args[++i];
+                    break;
+
+                default:
+                    // Any non-flag argument is the log path (positional)
+                    if (!args[i].StartsWith("-"))
+                        logPath = args[i];
+                    else
+                        InvalidExit();
                     break;
             }
         }
-        
-        if (log_file == null || !tokenFlag || (!arrival_flag && !departure_flag) || (employee_name == null && guest_name == null))
+
+        // ── Batch mode ────────────────────────────────────────────────
+        if (batchFile != null)
         {
-            validLog = false;
+            if (!File.Exists(batchFile))
+                InvalidExit();
+
+            string[] lines = File.ReadAllLines(batchFile);
+            foreach (string line in lines)
+            {
+                if (string.IsNullOrWhiteSpace(line)) continue;
+
+                // Split line into tokens respecting spaces
+                string[] lineArgs = line.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+
+                // -B is not allowed inside a batch file
+                if (lineArgs.Contains("-B"))
+                {
+                    Console.WriteLine("invalid");
+                    continue;
+                }
+
+                try
+                {
+                    ProcessCommand(lineArgs, parser);
+                }
+                catch (InvalidOperationException)
+                {
+                    Console.WriteLine("invalid");
+                }
+                catch (IntegrityViolationException)
+                {
+                    Console.WriteLine("integrity violation");
+                }
+            }
+
+            Environment.Exit(0);
         }
 
-        if (!validLog)
-        {
-            Console.WriteLine("invalid"); // MUST be exactly this string
-            Environment.Exit(111);        // MUST exit 111
-        }
-        
+        // ── Single-command mode ───────────────────────────────────────
         try
         {
-            GalleryState state = new GalleryState();
-            
-            // TODO: Read existing log_file, decrypt, and rebuild state history first!
-            
-            EPersonType type;
-            string name;
-
-            if (employee_name != null)
-            {
-                type = EPersonType.Employee;
-                name = employee_name;
-            }
-            else
-            {
-                type = EPersonType.Guest;
-                name = guest_name;
-            }
-            
-            //NOTE: I think we could do some sort of exploit here with allowing a user to be an EmployeeGuest or something  
-            int? parsedRoomId = null;
-            if (room_id != null)
-            {
-                parsedRoomId = int.Parse(room_id);
-            }
-
-            state.ApplyEvent(timestamp, name, type, arrival_flag, parsedRoomId);
-            // TODO: Write encrypted event to log_file
-            
-            Environment.Exit(0); // Success!
+            // Re-bundle parsed values into an array and process
+            ValidateAndAppend(
+                token, timestamp, employeeName, guestName,
+                arrivalFlag, departureFlag, roomId, logPath, parser
+            );
         }
-        catch (Exception)
+        catch (InvalidOperationException)
         {
-            // If ApplyEvent throws an exception (e.g. time didn't increase, person isn't in gallery)
-            Console.WriteLine("invalid");
+            InvalidExit();
+        }
+        catch (IntegrityViolationException)
+        {
+            Console.WriteLine("integrity violation");
             Environment.Exit(111);
         }
     }
-    
+
+    // ──────────────────────────────────────────────────────────────────
+    // ProcessCommand
+    // Parses a single command line (from batch or recursion) and appends.
+    // Throws InvalidOperationException on any validation failure.
+    // ──────────────────────────────────────────────────────────────────
+    static void ProcessCommand(string[] args, LogParser parser)
+    {
+        string? token         = null;
+        int?    timestamp     = null;
+        string? employeeName  = null;
+        string? guestName     = null;
+        bool    arrivalFlag   = false;
+        bool    departureFlag = false;
+        string? roomId        = null;
+        string? logPath       = null;
+
+        for (int i = 0; i < args.Length; i++)
+        {
+            string GetNext() => (i + 1 < args.Length) ? args[++i] : throw new InvalidOperationException();
+
+            switch (args[i])
+            {
+                case "-K":  token        = GetNext(); break;
+                case "-E":  employeeName = GetNext(); break;
+                case "-G":  guestName    = GetNext(); break;
+                case "-R":  roomId       = GetNext(); break;
+                case "-T":
+                    if (!int.TryParse(GetNext(), out int ts)) throw new InvalidOperationException();
+                    timestamp = ts;
+                    break;
+                case "-A":  arrivalFlag   = true; break;
+                case "-L":  departureFlag = true; break;
+                case "-B":  throw new InvalidOperationException();
+                default:
+                    if (!args[i].StartsWith("-")) logPath = args[i];
+                    else throw new InvalidOperationException();
+                    break;
+            }
+        }
+        
+
+        ValidateAndAppend(token, timestamp, employeeName, guestName,
+                          arrivalFlag, departureFlag, roomId, logPath, parser);
+    }
+
+    // ──────────────────────────────────────────────────────────────────
+    // ValidateAndAppend
+    // Validates all arguments and, if everything is consistent, appends
+    // the event to the log. Throws InvalidOperationException on any error.
+    // ──────────────────────────────────────────────────────────────────
+    static void ValidateAndAppend(
+    string? token,
+    int?    timestamp,
+    string? employeeName,
+    string? guestName,
+    bool    arrivalFlag,
+    bool    departureFlag,
+    string? roomId,
+    string? logPath,
+    LogParser parser)
+    {
+        // ── Mandatory fields ──────────────────────────────────────────
+        if (token == null || timestamp == null || logPath == null)
+            throw new InvalidOperationException("Missing required arguments.");
+
+        if (arrivalFlag == departureFlag)
+            throw new InvalidOperationException("Must specify exactly one of -A or -L.");
+
+        if (employeeName == null && guestName == null)
+            throw new InvalidOperationException("Must specify -E or -G.");
+        if (employeeName != null && guestName != null)
+            throw new InvalidOperationException("Cannot specify both -E and -G.");
+
+        if (!ValidToken(token))
+            throw new InvalidOperationException("Invalid token.");
+
+        if (timestamp < 1 || timestamp > 1_073_741_823)
+            throw new InvalidOperationException("Timestamp out of range.");
+
+        string name = (employeeName ?? guestName)!;
+        if (!Regex.IsMatch(name, @"^[a-zA-Z]+$"))
+            throw new InvalidOperationException("Invalid name.");
+
+        int? roomIdInt = null;
+        if (roomId != null)
+        {
+            if (!int.TryParse(roomId, out int rid) || rid < 0 || rid > 1_073_741_823)
+                throw new InvalidOperationException("Invalid room ID.");
+            roomIdInt = rid;
+        }
+
+        if (!ValidLogPath(logPath))
+            throw new InvalidOperationException("Invalid log path.");
+
+        if (!parser.ValidateToken(token, logPath))
+            throw new IntegrityViolationException();
+
+        // ── Reconstruct state and validate the new event ──────────────
+        List<LogEvent> history = File.Exists(logPath)
+            ? parser.ReadAllEvents(token, logPath)
+            : new List<LogEvent>();
+
+        var state = new GalleryState();
+        foreach (var evt in history)
+        {
+            EPersonType t = evt.PersonType switch {
+                "E" => EPersonType.Employee,
+                "G" => EPersonType.Guest,
+                _   => throw new InvalidOperationException()
+            };
+            state.ApplyEvent(evt.Timestamp, evt.Name, t, evt.Action == "A", evt.RoomId);
+        }
+
+        // Try applying the new event - GalleryState handles all business logic
+        EPersonType personType = employeeName != null ? EPersonType.Employee : EPersonType.Guest;
+        try
+        {
+            state.ApplyEvent(timestamp.Value, name, personType, arrivalFlag, roomIdInt);
+        }
+        catch (InvalidCommandException ex)
+        {
+            throw new InvalidOperationException(ex.Message);
+        }
+
+        // ── All checks passed — build and append the event ────────────
+        string personTypeStr = employeeName != null ? "E" : "G";
+        string action        = arrivalFlag ? "A" : "L";
+
+        var logEvent = new LogEvent
+        {
+            Timestamp  = timestamp.Value,
+            PersonType = personTypeStr,
+            Name       = name,
+            Action     = action,
+            RoomId     = roomIdInt
+        };
+
+        parser.AppendEvent(logEvent, token, logPath);
+    }
+
+    // ──────────────────────────────────────────────────────────────────
+    // ValidToken
+    // Token must be alphanumeric (a-z, A-Z, 0-9), non-empty.
+    // ──────────────────────────────────────────────────────────────────
     static bool ValidToken(string t)
+        => !string.IsNullOrEmpty(t) && Regex.IsMatch(t, @"^[a-zA-Z0-9]+$");
+
+    // ──────────────────────────────────────────────────────────────────
+    // ValidLogPath
+    // Log filename: alphanumeric, underscores, periods, slashes allowed.
+    // ──────────────────────────────────────────────────────────────────
+    static bool ValidLogPath(string path)
+        => !string.IsNullOrEmpty(path) && Regex.IsMatch(path, @"^[a-zA-Z0-9_./\\]+$");
+
+    // ──────────────────────────────────────────────────────────────────
+    // InvalidExit
+    // Prints "invalid" and exits with code 111 per spec.
+    // ──────────────────────────────────────────────────────────────────
+    static void InvalidExit()
     {
-        //TODO
-        return true;
-    }
-    
-    static bool ValidLog(string t)
-    {
-        //TODO
-        return true;
-    }
-    
-    static LogEvent LogGenerator
-    (
-        int timestamp,
-        string employee_name,
-        string guest_name,
-        bool arrival_flag,
-        bool departure_flag,
-        string room_id,
-        bool log
-    )
-    {
-        //TODO
-        return null;
+        Console.WriteLine("invalid");
+        Environment.Exit(111);
     }
 }
-

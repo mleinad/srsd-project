@@ -1,7 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 
-namespace GalleryCore.IO;
+namespace GalleryCore.IO;   
 
 public class LogParser
 {
