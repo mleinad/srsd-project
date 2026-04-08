@@ -195,10 +195,6 @@ class Program
             }
         }
         
-        if (log_file == null || !tokenFlag || (!arrival_flag && !departure_flag) || (employee_name == null && guest_name == null))
-        {
-            validLog = false;
-        }
 
         ValidateAndAppend(token, timestamp, employeeName, guestName,
                           arrivalFlag, departureFlag, roomId, logPath, parser);
@@ -342,7 +338,7 @@ class Program
             string key = evt.Name + evt.PersonType;
 
             if (!people.ContainsKey(key))
-                people[key] = new Person(evt.Name, evt.PersonType);
+                people[key] = new Person(evt.Name, Enum.Parse<EPersonType>(evt.PersonType));
 
             var person = people[key];
 
