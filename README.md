@@ -3,11 +3,11 @@ How to run the program using .NET:
 1. Install the .NET SDK from dotnet.microsoft.com/download
 2. Go to program.cs directory
 3. Build file with:
-5.   'dotnet publish .\logappend\logappend.csproj -o .\build\logappend'
-5.   'dotnet publish .\logread\logread.csproj -o .\build\logread'
-6. Run with:
-7.   .\build\logappend\logappend [flags]
-8.   .\build\logread\logappend [flags]
+  'dotnet publish .\logappend\logappend.csproj -o .\build\logappend'
+  'dotnet publish .\logread\logread.csproj -o .\build\logread'
+7. Run with:
+  .\build\logappend\logappend [flags]
+  .\build\logread\logread [flags]
 
 
 In the future, we should build so that it can be run without .NET:
