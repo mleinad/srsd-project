@@ -184,170 +184,93 @@ class Program
     // the event to the log. Throws InvalidOperationException on any error.
     // ──────────────────────────────────────────────────────────────────
     static void ValidateAndAppend(
-        string? token,
-        int?    timestamp,
-        string? employeeName,
-        string? guestName,
-        bool    arrivalFlag,
-        bool    departureFlag,
-        string? roomId,
-        string? logPath,
-        LogParser parser)
+    string? token,
+    int?    timestamp,
+    string? employeeName,
+    string? guestName,
+    bool    arrivalFlag,
+    bool    departureFlag,
+    string? roomId,
+    string? logPath,
+    LogParser parser)
     {
         // ── Mandatory fields ──────────────────────────────────────────
         if (token == null || timestamp == null || logPath == null)
             throw new InvalidOperationException("Missing required arguments.");
 
-        // Exactly one of -A or -L must be set
-        if (arrivalFlag == departureFlag)   // both false OR both true
+        if (arrivalFlag == departureFlag)
             throw new InvalidOperationException("Must specify exactly one of -A or -L.");
 
-        // Exactly one of -E or -G must be set
         if (employeeName == null && guestName == null)
             throw new InvalidOperationException("Must specify -E or -G.");
         if (employeeName != null && guestName != null)
             throw new InvalidOperationException("Cannot specify both -E and -G.");
 
-        // ── Token validation ──────────────────────────────────────────
         if (!ValidToken(token))
             throw new InvalidOperationException("Invalid token.");
 
-        // ── Timestamp range: 1 to 1,073,741,823 ──────────────────────
         if (timestamp < 1 || timestamp > 1_073_741_823)
             throw new InvalidOperationException("Timestamp out of range.");
 
-        // ── Name validation: alphabetic only per spec ─────────────────
         string name = (employeeName ?? guestName)!;
         if (!Regex.IsMatch(name, @"^[a-zA-Z]+$"))
             throw new InvalidOperationException("Invalid name.");
 
-        // ── Room ID validation ────────────────────────────────────────
         int? roomIdInt = null;
         if (roomId != null)
         {
             if (!int.TryParse(roomId, out int rid) || rid < 0 || rid > 1_073_741_823)
                 throw new InvalidOperationException("Invalid room ID.");
-            roomIdInt = rid;  // leading zeros are dropped automatically by int.Parse
+            roomIdInt = rid;
         }
 
-        // ── Log path validation ───────────────────────────────────────
         if (!ValidLogPath(logPath))
             throw new InvalidOperationException("Invalid log path.");
 
-        // ── Token must match the existing log ─────────────────────────
         if (!parser.ValidateToken(token, logPath))
             throw new IntegrityViolationException();
 
-        // ── Timestamp must be greater than the last recorded one ──────
-        int lastTimestamp = parser.GetLastTimestamp(token, logPath);
-        if (timestamp <= lastTimestamp)
-            throw new InvalidOperationException("Timestamp is not greater than the last recorded timestamp.");
-
-        // ── Reconstruct current gallery state from the log ────────────
+        // ── Reconstruct state and validate the new event ──────────────
         List<LogEvent> history = File.Exists(logPath)
             ? parser.ReadAllEvents(token, logPath)
             : new List<LogEvent>();
 
-        var people = BuildState(history);
-        
-        // Ternary operators to set persontype & action to the correct value
-        string personType = employeeName != null ? "E" : "G";
-        string action     = arrivalFlag ? "A" : "L";
+        var state = new GalleryState();
+        foreach (var evt in history)
+        {
+            EPersonType t = evt.PersonType switch {
+                "E" => EPersonType.Employee,
+                "G" => EPersonType.Guest,
+                _   => throw new InvalidOperationException()
+            };
+            state.ApplyEvent(evt.Timestamp, evt.Name, t, evt.Action == "A", evt.RoomId);
+        }
 
-        // ── Business-logic consistency checks ─────────────────────────
-        people.TryGetValue(name + personType, out Person? person);
-
-        if (action == "A" && roomIdInt == null)
+        // Try applying the new event - GalleryState handles all business logic
+        EPersonType personType = employeeName != null ? EPersonType.Employee : EPersonType.Guest;
+        try
         {
-            // Arriving at the gallery
-            if (person != null && person.InGallery)
-                throw new InvalidOperationException("Person is already in the gallery.");
+            state.ApplyEvent(timestamp.Value, name, personType, arrivalFlag, roomIdInt);
         }
-        else if (action == "L" && roomIdInt == null)
+        catch (InvalidCommandException ex)
         {
-            // Leaving the gallery
-            if (person == null || !person.InGallery)
-                throw new InvalidOperationException("Person is not in the gallery.");
-            if (person.CurrentRoom != null)
-                throw new InvalidOperationException("Person must leave their current room before leaving the gallery.");
-        }
-        else if (action == "A" && roomIdInt != null)
-        {
-            // Arriving at a room
-            if (person == null || !person.InGallery)
-                throw new InvalidOperationException("Person must be in the gallery before entering a room.");
-            if (person.CurrentRoom != null)
-                throw new InvalidOperationException("Person must leave their current room before entering another.");
-        }
-        else if (action == "L" && roomIdInt != null)
-        {
-            // Leaving a room
-            if (person == null || !person.InGallery)
-                throw new InvalidOperationException("Person is not in the gallery.");
-            if (person.CurrentRoom != roomIdInt)
-                throw new InvalidOperationException("Person is not in the specified room.");
+            throw new InvalidOperationException(ex.Message);
         }
 
         // ── All checks passed — build and append the event ────────────
+        string personTypeStr = employeeName != null ? "E" : "G";
+        string action        = arrivalFlag ? "A" : "L";
+
         var logEvent = new LogEvent
         {
             Timestamp  = timestamp.Value,
-            PersonType = personType,
+            PersonType = personTypeStr,
             Name       = name,
             Action     = action,
             RoomId     = roomIdInt
         };
 
         parser.AppendEvent(logEvent, token, logPath);
-    }
-
-    // ──────────────────────────────────────────────────────────────────
-    // BuildState
-    // Replays all log events and returns a dictionary of Person objects
-    // keyed by Name+Type (e.g., "FredE", "JillG") representing the
-    // current state of the gallery.
-    // ──────────────────────────────────────────────────────────────────
-    static Dictionary<string, Person> BuildState(List<LogEvent> history)
-    {
-        var people = new Dictionary<string, Person>();
-
-        foreach (var evt in history)
-        {
-            string key = evt.Name + evt.PersonType;
-
-            if (!people.ContainsKey(key))
-            {
-                EPersonType personType = evt.PersonType switch {
-                    "E" => EPersonType.Employee,
-                    "G" => EPersonType.Guest,
-                    _ => throw new InvalidOperationException($"Unknown person type: {evt.PersonType}")
-                };
-                people[key] = new Person(evt.Name, personType);
-            }
-
-            var person = people[key];
-
-            if (evt.Action == "A" && evt.RoomId == null)
-            {
-                person.InGallery   = true;
-                person.CurrentRoom = null;
-            }
-            else if (evt.Action == "L" && evt.RoomId == null)
-            {
-                person.InGallery   = false;
-                person.CurrentRoom = null;
-            }
-            else if (evt.Action == "A" && evt.RoomId != null)
-            {
-                person.CurrentRoom = evt.RoomId;
-            }
-            else if (evt.Action == "L" && evt.RoomId != null)
-            {
-                person.CurrentRoom = null;
-            }
-        }
-
-        return people;
     }
 
     // ──────────────────────────────────────────────────────────────────
