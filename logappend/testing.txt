@@ -1,0 +1,6 @@
+log1 -K abcdefgh -T 1 -E MatiasP -A
+log1 -K abcdefgh -T 2 -E MatiasP -A -R 1
+log1 -K abcdefgh -T 3 -E MatiasP -L -R 1
+log1 -K abcdefgh -T 4 -E MatiasP -A -R 2
+log1 -K abcdefgh -T 7 -E MatiasP -L -R 2
+log1 -K abcdefgh -T 200 -E MatiasP -L
