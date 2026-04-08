@@ -338,7 +338,14 @@ class Program
             string key = evt.Name + evt.PersonType;
 
             if (!people.ContainsKey(key))
-                people[key] = new Person(evt.Name, Enum.Parse<EPersonType>(evt.PersonType));
+            {
+                EPersonType personType = evt.PersonType switch {
+                    "E" => EPersonType.Employee,
+                    "G" => EPersonType.Guest,
+                    _ => throw new InvalidOperationException($"Unknown person type: {evt.PersonType}")
+                };
+                people[key] = new Person(evt.Name, personType);
+            }
 
             var person = people[key];
 

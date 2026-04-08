@@ -149,14 +149,13 @@ class Program
 
         // Employees in gallery, sorted
         var employees = people.Values
-            .Where(p => p.Type == "E" && p.InGallery)
+            .Where(p => p.Type == EPersonType.Employee && p.InGallery)
             .Select(p => p.Name)
             .OrderBy(n => n)
             .ToList();
 
-        // Guests in gallery, sorted
         var guests = people.Values
-            .Where(p => p.Type == "G" && p.InGallery)
+            .Where(p => p.Type == EPersonType.Guest && p.InGallery)
             .Select(p => p.Name)
             .OrderBy(n => n)
             .ToList();
@@ -343,7 +342,14 @@ class Program
             string key = evt.Name + evt.PersonType;
 
             if (!people.ContainsKey(key))
-                people[key] = new Person(evt.Name, evt.PersonType);
+            {
+                EPersonType personType = evt.PersonType switch {
+                    "E" => EPersonType.Employee,
+                    "G" => EPersonType.Guest,
+                    _ => throw new InvalidOperationException($"Unknown person type: {evt.PersonType}")
+                };
+                people[key] = new Person(evt.Name, personType);
+            }
 
             var person = people[key];
 
