@@ -151,46 +151,24 @@ class Program
 
         for (int i = 0; i < args.Length; i++)
         {
-            // Helper to safely get the next argument without crashing
-            string GetNext() => (i + 1 < args.Length) ? args[++i] : null;
-            
+            string GetNext() => (i + 1 < args.Length) ? args[++i] : throw new InvalidOperationException();
+
             switch (args[i])
             {
-                case "-K":
-                    if (i + 1 >= args.Length) throw new InvalidOperationException();
-                    token = args[++i];
-                    break;
+                case "-K":  token        = GetNext(); break;
+                case "-E":  employeeName = GetNext(); break;
+                case "-G":  guestName    = GetNext(); break;
+                case "-R":  roomId       = GetNext(); break;
                 case "-T":
-                    if (i + 1 >= args.Length) throw new InvalidOperationException();
-                    if (!int.TryParse(args[++i], out int ts)) throw new InvalidOperationException();
+                    if (!int.TryParse(GetNext(), out int ts)) throw new InvalidOperationException();
                     timestamp = ts;
                     break;
-                case "-E":
-                    if (i + 1 >= args.Length) throw new InvalidOperationException();
-                    employeeName = args[++i];
-                    break;
-                case "-G":
-                    if (i + 1 >= args.Length) throw new InvalidOperationException();
-                    guestName = args[++i];
-                    break;
-                case "-A":
-                    arrivalFlag = true;
-                    break;
-                case "-L":
-                    departureFlag = true;
-                    break;
-                case "-R":
-                    if (i + 1 >= args.Length) throw new InvalidOperationException();
-                    roomId = args[++i];
-                    break;
-                case "-B":
-                    // -B is not allowed inside batch files
-                    throw new InvalidOperationException();
+                case "-A":  arrivalFlag   = true; break;
+                case "-L":  departureFlag = true; break;
+                case "-B":  throw new InvalidOperationException();
                 default:
-                    if (!args[i].StartsWith("-"))
-                        logPath = args[i];
-                    else
-                        throw new InvalidOperationException();
+                    if (!args[i].StartsWith("-")) logPath = args[i];
+                    else throw new InvalidOperationException();
                     break;
             }
         }
