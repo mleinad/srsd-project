@@ -1,4 +1,4 @@
-﻿using GalleryCore;
+using GalleryCore;
 using GalleryCore.IO;
 using System.Text.RegularExpressions;
 
@@ -66,7 +66,6 @@ class Program
                     break;
 
                 default:
-                    // Any non-flag argument is the log path (positional)
                     if (!args[i].StartsWith("-"))
                         logPath = args[i];
                     else
@@ -79,48 +78,21 @@ class Program
         if (batchFile != null)
         {
             if (!File.Exists(batchFile))
-                InvalidExit();
-
-            string[] lines = File.ReadAllLines(batchFile);
-            foreach (string line in lines)
             {
-                if (string.IsNullOrWhiteSpace(line)) continue;
-
-                // Split line into tokens respecting spaces
-                string[] lineArgs = line.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
-
-                // -B is not allowed inside a batch file
-                if (lineArgs.Contains("-B"))
-                {
-                    Console.WriteLine("invalid");
-                    continue;
-                }
-
-                try
-                {
-                    ProcessCommand(lineArgs, parser);
-                }
-                catch (InvalidOperationException)
-                {
-                    Console.WriteLine("invalid");
-                }
-                catch (IntegrityViolationException)
-                {
-                    Console.WriteLine("integrity violation");
-                }
+                Console.WriteLine("invalid");
+                Environment.Exit(111);
+                return;
             }
-
+            RunBatch(batchFile);
             Environment.Exit(0);
+            return;
         }
 
-        // ── Single-command mode ───────────────────────────────────────
         try
         {
-            // Re-bundle parsed values into an array and process
             ValidateAndAppend(
                 token, timestamp, employeeName, guestName,
-                arrivalFlag, departureFlag, roomId, logPath, parser
-            );
+                arrivalFlag, departureFlag, roomId, logPath, parser);
         }
         catch (InvalidOperationException)
         {
@@ -134,11 +106,57 @@ class Program
     }
 
     // ──────────────────────────────────────────────────────────────────
+    // RunBatch
+    //
+    // If the batch file does not exist, prints "invalid" to stdout.
+    // ──────────────────────────────────────────────────────────────────
+    private static void RunBatch(string batchFile)
+    {
+        var parser = new LogParser();
+
+        if (!File.Exists(batchFile))
+        {
+            Console.WriteLine("invalid");
+            return;
+        }
+
+        string[] lines = File.ReadAllLines(batchFile);
+        foreach (string line in lines)
+        {
+            if (string.IsNullOrWhiteSpace(line)) continue;
+
+            // Split line into tokens respecting spaces
+            string[] lineArgs = line.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+
+            // -B is not allowed inside a batch file
+            if (lineArgs.Contains("-B"))
+            {
+                Console.WriteLine("invalid");
+                continue;
+            }
+
+            try
+            {
+                ProcessCommand(lineArgs, parser);
+            }
+            catch (InvalidOperationException)
+            {
+                Console.WriteLine("invalid");
+            }
+            catch (IntegrityViolationException)
+            {
+                Console.WriteLine("integrity violation");
+            }
+        }
+    }
+
+    // ──────────────────────────────────────────────────────────────────
     // ProcessCommand
-    // Parses a single command line (from batch or recursion) and appends.
+    //
+    // Parses a single command line (from batch) and appends.
     // Throws InvalidOperationException on any validation failure.
     // ──────────────────────────────────────────────────────────────────
-    static void ProcessCommand(string[] args, LogParser parser)
+    private static void ProcessCommand(string[] args, LogParser parser)
     {
         string? token         = null;
         int?    timestamp     = null;
@@ -172,7 +190,6 @@ class Program
                     break;
             }
         }
-        
 
         ValidateAndAppend(token, timestamp, employeeName, guestName,
                           arrivalFlag, departureFlag, roomId, logPath, parser);
@@ -180,21 +197,22 @@ class Program
 
     // ──────────────────────────────────────────────────────────────────
     // ValidateAndAppend
+    //
     // Validates all arguments and, if everything is consistent, appends
     // the event to the log. Throws InvalidOperationException on any error.
     // ──────────────────────────────────────────────────────────────────
     static void ValidateAndAppend(
-    string? token,
-    int?    timestamp,
-    string? employeeName,
-    string? guestName,
-    bool    arrivalFlag,
-    bool    departureFlag,
-    string? roomId,
-    string? logPath,
-    LogParser parser)
+        string? token,
+        int?    timestamp,
+        string? employeeName,
+        string? guestName,
+        bool    arrivalFlag,
+        bool    departureFlag,
+        string? roomId,
+        string? logPath,
+        LogParser parser)
     {
-        // ── Mandatory fields ──────────────────────────────────────────
+        // ── Mandatory presence ────────────────────────────────────────
         if (token == null || timestamp == null || logPath == null)
             throw new InvalidOperationException("Missing required arguments.");
 
@@ -203,9 +221,11 @@ class Program
 
         if (employeeName == null && guestName == null)
             throw new InvalidOperationException("Must specify -E or -G.");
+
         if (employeeName != null && guestName != null)
             throw new InvalidOperationException("Cannot specify both -E and -G.");
 
+        // ── Format validation ─────────────────────────────────────────
         if (!ValidToken(token))
             throw new InvalidOperationException("Invalid token.");
 
@@ -227,10 +247,11 @@ class Program
         if (!ValidLogPath(logPath))
             throw new InvalidOperationException("Invalid log path.");
 
+        // ── Token / integrity check ───────────────────────────────────
         if (!parser.ValidateToken(token, logPath))
             throw new IntegrityViolationException();
 
-        // ── Reconstruct state and validate the new event ──────────────
+        // ── Replay state and validate the new event ───────────────────
         List<LogEvent> history = File.Exists(logPath)
             ? parser.ReadAllEvents(token, logPath)
             : new List<LogEvent>();
@@ -257,24 +278,32 @@ class Program
             throw new InvalidOperationException(ex.Message);
         }
 
-        // ── All checks passed — build and append the event ────────────
-        string personTypeStr = employeeName != null ? "E" : "G";
-        string action        = arrivalFlag ? "A" : "L";
-
+        // ── All checks passed — append the event ──────────────────────
         var logEvent = new LogEvent
         {
             Timestamp  = timestamp.Value,
-            PersonType = personTypeStr,
+            PersonType = employeeName != null ? "E" : "G",
             Name       = name,
-            Action     = action,
+            Action     = arrivalFlag ? "A" : "L",
             RoomId     = roomIdInt
         };
 
-        parser.AppendEvent(logEvent, token, logPath);
+        try {
+            parser.AppendEvent(logEvent, token, logPath);
+        }
+        catch (IntegrityViolationException)
+        {
+            throw; 
+        }
+        catch (IOException)  
+        {
+            throw new InvalidOperationException("invalid log path");
+        }
     }
 
     // ──────────────────────────────────────────────────────────────────
     // ValidToken
+    //
     // Token must be alphanumeric (a-z, A-Z, 0-9), non-empty.
     // ──────────────────────────────────────────────────────────────────
     static bool ValidToken(string t)
@@ -282,6 +311,7 @@ class Program
 
     // ──────────────────────────────────────────────────────────────────
     // ValidLogPath
+    //
     // Log filename: alphanumeric, underscores, periods, slashes allowed.
     // ──────────────────────────────────────────────────────────────────
     static bool ValidLogPath(string path)
@@ -289,6 +319,7 @@ class Program
 
     // ──────────────────────────────────────────────────────────────────
     // InvalidExit
+    //
     // Prints "invalid" and exits with code 111 per spec.
     // ──────────────────────────────────────────────────────────────────
     static void InvalidExit()
