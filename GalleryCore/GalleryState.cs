@@ -36,7 +36,6 @@ public class GalleryState
                 if (p.CurrentRoom != null) throw new InvalidCommandException("Must leave previous room first."); 
                 
                 p.CurrentRoom = roomId;
-                p.RoomHistory.Add(roomId.Value);
             }
         }
         else // Departure

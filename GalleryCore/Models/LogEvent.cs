@@ -2,11 +2,11 @@ namespace GalleryCore;
 
 public class LogEvent
 {
-    public int             Timestamp  { get; set; }  // seconds since gallery opened
-    public required string PersonType { get; set; }  // "E" = Employee | "G" = Guest
-    public required string Name       { get; set; }  // person's name
-    public required string Action     { get; set; }  // "A" = Arrive | "L" = Leave
-    public int?            RoomId     { get; set; }  // null = entire gallery
+    public int             Timestamp  { get; init; }  // seconds since gallery opened
+    public required string PersonType { get; init; }  // "E" = Employee | "G" = Guest
+    public required string Name       { get; init; }  // person's name
+    public required string Action     { get; init; }  // "A" = Arrive | "L" = Leave
+    public int?            RoomId     { get; init; }  // null = entire gallery
 
     public string Serialize()
         => $"{Timestamp},{PersonType},{Name},{Action},{RoomId?.ToString() ?? ""}";
