@@ -44,7 +44,34 @@ class Program
             Environment.Exit(111);
             return;
         }
-
+       
+        //Extra layer of validation, checks deserialized events for logical consistency 
+        try
+        {
+            var state = new GalleryState();
+            foreach (var evt in history)
+            {
+                EPersonType type = evt.PersonType switch {
+                    "E" => EPersonType.Employee,
+                    "G" => EPersonType.Guest,
+                    _   => throw new IntegrityViolationException()
+                };
+                state.ApplyEvent(evt.Timestamp, evt.Name, type, evt.Action == "A", evt.RoomId);
+            }
+        }
+        catch (InvalidCommandException)
+        {
+            Console.WriteLine("integrity violation");
+            Environment.Exit(111);
+            return;
+        }
+        catch (IntegrityViolationException)
+        {
+            Console.WriteLine("integrity violation");
+            Environment.Exit(111);
+            return;
+        }
+        
         if (parsed.QueryS)
             RunQueryS(history);
         else if (parsed.QueryR)
