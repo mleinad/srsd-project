@@ -8,9 +8,6 @@ class Program
 {
     static void Main(string[] args)
     {
-        var stdout = new StreamWriter(Console.OpenStandardOutput()) { NewLine = "\n", AutoFlush = true };
-        Console.SetOut(stdout);
-
         var parser = new LogParser();
 
         string? token         = null;

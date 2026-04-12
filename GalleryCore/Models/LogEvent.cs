@@ -19,26 +19,20 @@ public class LogEvent
         if (parts.Length != 5)
             throw new IntegrityViolationException();
 
-        // Timestamp: must be a positive integer within valid range
         if (!int.TryParse(parts[0], out int timestamp) || timestamp < 1 || timestamp > 1_073_741_823)
             throw new IntegrityViolationException();
 
-        // PersonType: must be exactly "E" or "G"
         string personType = parts[1];
         if (personType != "E" && personType != "G")
             throw new IntegrityViolationException();
 
-        // Name: must be non-empty alphabetic string
         string name = parts[2];
         if (string.IsNullOrEmpty(name) || !Regex.IsMatch(name, @"^[a-zA-Z]+$"))
             throw new IntegrityViolationException();
 
-        // Action: must be exactly "A" or "L"
         string action = parts[3];
         if (action != "A" && action != "L")
             throw new IntegrityViolationException();
-
-        // RoomId: empty (gallery-level event) or valid non-negative integer
         int? roomId = null;
         if (!string.IsNullOrEmpty(parts[4]))
         {

@@ -66,20 +66,16 @@ public class LogParser
 
             // 5. Decrypt and validate event fields
             string plainText = Decrypt(cipherBytes, token);
-<<<<<<< HEAD
             
             //Validate serialization for format integrity aswell
             try
             {
-                eventos.Add(LogEvent.Deserialize(plainText.Trim()));
+                events.Add(LogEvent.Deserialize(plainText.Trim()));
             }
             catch (FormatException)
             {
                 throw new IntegrityViolationException();
             }
-=======
-            events.Add(LogEvent.Deserialize(plainText.Trim()));
->>>>>>> d8e4618 (perf(core): reduce logappend file scans from O(3n) to O(n))
 
             prevHmac = storedHmac;
         }
