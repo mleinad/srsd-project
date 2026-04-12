@@ -17,13 +17,38 @@ public class LogEvent
         if (parts.Length != 5)
             throw new FormatException($"Invalid log line: '{line}'");
 
+        // Validate PersonType
+        if (parts[1] is not "E" and not "G")
+            throw new FormatException($"Invalid person type: '{parts[1]}'");
+
+        // Validate Action
+        if (parts[3] is not "A" and not "L")
+            throw new FormatException($"Invalid action: '{parts[3]}'");
+
+        // Validate Timestamp
+        if (!int.TryParse(parts[0], out int timestamp) || timestamp < 1 || timestamp > 1_073_741_823)
+            throw new FormatException($"Invalid timestamp: '{parts[0]}'");
+
+        // Validate Name
+        if (!System.Text.RegularExpressions.Regex.IsMatch(parts[2], @"^[a-zA-Z]+$"))
+            throw new FormatException($"Invalid name: '{parts[2]}'");
+
+        // Validate RoomId
+        int? roomId = null;
+        if (!string.IsNullOrEmpty(parts[4]))
+        {
+            if (!int.TryParse(parts[4], out int rid) || rid < 0 || rid > 1_073_741_823)
+                throw new FormatException($"Invalid room ID: '{parts[4]}'");
+            roomId = rid;
+        }
+
         return new LogEvent
         {
-            Timestamp  = int.Parse(parts[0]),
+            Timestamp  = timestamp,
             PersonType = parts[1],
             Name       = parts[2],
             Action     = parts[3],
-            RoomId     = string.IsNullOrEmpty(parts[4]) ? null : int.Parse(parts[4])
+            RoomId     = roomId
         };
     }
 }

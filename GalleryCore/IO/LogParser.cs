@@ -64,12 +64,24 @@ public class LogParser
             // Verify the HMAC
             byte[] chainInput = previousHmac.Concat(lenBytes).Concat(cipherBytes).ToArray();
             byte[] expectedHmac = ComputeHMAC(chainInput, hmacKey);
+          
             if (!ConstantTimeEquals(expectedHmac, storedHmac))
+            {
                 throw new IntegrityViolationException();
+            }
 
             // Decrypt and reconstruct the event
             string plainText = Decrypt(cipherBytes, token);
-            eventos.Add(LogEvent.Deserialize(plainText.Trim()));
+            
+            //Validate serialization for format integrity aswell
+            try
+            {
+                eventos.Add(LogEvent.Deserialize(plainText.Trim()));
+            }
+            catch (FormatException)
+            {
+                throw new IntegrityViolationException();
+            }
 
             previousHmac = storedHmac;
         }
