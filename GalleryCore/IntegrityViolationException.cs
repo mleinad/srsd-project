@@ -7,15 +7,3 @@ public class IntegrityViolationException : Exception
     public IntegrityViolationException()
         : base("integrity violation") { }
 }
-
-public class InvalidCommandException : Exception
-{
-    // The base message is strictly "invalid" to match stdout requirements.
-    public string DebugMessage { get; }
-
-    public InvalidCommandException(string debugMessage = "")
-        : base("invalid") 
-    { 
-        DebugMessage = debugMessage;
-    }
-}
