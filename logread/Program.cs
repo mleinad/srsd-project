@@ -8,12 +8,15 @@ class Program
 {
     static void Main(string[] args)
     {
+        var stdout = new StreamWriter(Console.OpenStandardOutput()) { NewLine = "\n", AutoFlush = true };
+        Console.SetOut(stdout);
+
         ParsedArgs parsed;
         try
         {
             parsed = ProcessArgs(args);
         }
-        catch (InvalidOperationException)
+        catch (InvalidCommandException)
         {
             InvalidExit();
             return;
@@ -31,17 +34,17 @@ class Program
         List<LogEvent> history;
         try
         {
+            if (!File.Exists(parsed.LogPath))
+            {
+                InvalidExit();
+                return;
+            }
             history = parser.ReadAllEvents(parsed.Token, parsed.LogPath);
         }
         catch (IntegrityViolationException)
         {
             Console.WriteLine("integrity violation");
             Environment.Exit(111);
-            return;
-        }
-        catch (FileNotFoundException)
-        {
-            InvalidExit();
             return;
         }
 
@@ -56,63 +59,67 @@ class Program
     // ──────────────────────────────────────────────────────────────────
     // ProcessArgs
     //
-    // Launches InvalidOperationException on any validation error.
+    // Parses and validates all command-line arguments for logread.
+    // Throws InvalidCommandException on any invalid or contradictory
+    // combination so that Main can catch it and call InvalidExit().
     // ──────────────────────────────────────────────────────────────────
     private static ParsedArgs ProcessArgs(string[] args)
     {
         string? token      = null;
         string? logPath    = null;
-        bool    queryS     = false; // -S: print current state
-        bool    queryR     = false; // -R: list rooms visited by person
-        bool    queryI     = false; // -I: rooms shared by all specified people (optional)
-        string? personType = null; // -E or -G
-        string? personName = null; // for -R (single person)
-        var     queryIList = new List<(string Type, string Name)>(); // for -I (multiple people)
+        bool    queryS     = false;
+        bool    queryR     = false;
+        bool    queryI     = false;
+        string? personType = null;
+        string? personName = null;
+        var     queryIList = new List<(string Type, string Name)>();
 
         bool seenK      = false;
         bool seenS      = false;
         bool seenR      = false;
         bool seenI      = false;
-        bool seenPerson = false; // -E or -G for -R
+        bool seenPerson = false;
 
         for (int i = 0; i < args.Length; i++)
         {
             string GetNext() => (i + 1 < args.Length)
                 ? args[++i]
-                : throw new InvalidOperationException();
+                : throw new InvalidCommandException();
 
             switch (args[i])
             {
                 case "-K":
-                    if (seenK) throw new InvalidOperationException();
+                    if (seenK) throw new InvalidCommandException();
                     seenK = true;
                     token = GetNext();
                     break;
 
                 case "-S":
-                    if (seenS) throw new InvalidOperationException();
-                    seenS = true;
+                    if (seenS) throw new InvalidCommandException();
+                    seenS  = true;
                     queryS = true;
                     break;
 
                 case "-R":
-                    if (seenR) throw new InvalidOperationException();
-                    seenR = true;
+                    if (seenR) throw new InvalidCommandException();
+                    seenR  = true;
                     queryR = true;
                     break;
 
                 case "-I":
-                    if (seenI) throw new InvalidOperationException();
-                    seenI = true;
+                    if (seenI) throw new InvalidCommandException();
+                    seenI  = true;
                     queryI = true;
                     break;
 
                 case "-E":
+                    // When used with -I, multiple -E/-G flags are allowed (one per person).
+                    // When used with -R or -S, only a single -E or -G is permitted.
                     if (queryI)
                         queryIList.Add(("E", GetNext()));
                     else
                     {
-                        if (seenPerson) throw new InvalidOperationException();
+                        if (seenPerson) throw new InvalidCommandException();
                         seenPerson = true;
                         personType = "E";
                         personName = GetNext();
@@ -124,7 +131,7 @@ class Program
                         queryIList.Add(("G", GetNext()));
                     else
                     {
-                        if (seenPerson) throw new InvalidOperationException();
+                        if (seenPerson) throw new InvalidCommandException();
                         seenPerson = true;
                         personType = "G";
                         personName = GetNext();
@@ -135,41 +142,33 @@ class Program
                     if (!args[i].StartsWith("-"))
                         logPath = args[i];
                     else
-                        throw new InvalidOperationException();
+                        throw new InvalidCommandException();
                     break;
             }
         }
-
-        // ── Validate arguments ────────────────────────────────────────
 
         var duplicates = queryIList
             .GroupBy(p => (p.Type, p.Name))
             .Where(g => g.Count() > 1)
             .ToList();
-
         if (duplicates.Any())
-            throw new InvalidOperationException("duplicate person in -I query");
+            throw new InvalidCommandException();
 
-        // Token and log path are always required
         if (token == null || logPath == null)
-            throw new InvalidOperationException();
+            throw new InvalidCommandException();
 
-        // Token must be alphanumeric
         if (!Regex.IsMatch(token, @"^[a-zA-Z0-9]+$"))
-            throw new InvalidOperationException();
+            throw new InvalidCommandException();
 
-        // Exactly one query mode must be specified
         int queryCount = (queryS ? 1 : 0) + (queryR ? 1 : 0) + (queryI ? 1 : 0);
         if (queryCount != 1)
-            throw new InvalidOperationException();
+            throw new InvalidCommandException();
 
-        // -R requires exactly one -E or -G 
         if (queryR && (personType == null || personName == null))
-            throw new InvalidOperationException();
+            throw new InvalidCommandException();
 
-        // -S must not have -E or -G
         if (queryS && personType != null)
-            throw new InvalidOperationException();
+            throw new InvalidCommandException();
 
         return new ParsedArgs(token, logPath, queryS, queryR, queryI,
                               personType, personName, queryIList);
@@ -178,12 +177,12 @@ class Program
     // ──────────────────────────────────────────────────────────────────
     // RunQueryS  (-S)
     //
-    // Prints the current state of the gallery:
-    //   Line 1: comma-separated employees currently in the gallery
-    //   Line 2: comma-separated guests currently in the gallery
-    //   Remaining lines: room-by-room info (sorted by room ID ascending)
-    //     Format: "<roomId>: <name1>,<name2>,..."
-    //   Names within each line sorted lexicographically.
+    // Prints the current state of the gallery to stdout:
+    //   Line 1 — comma-separated list of employees currently inside.
+    //   Line 2 — comma-separated list of guests currently inside.
+    //   Lines 3+ — one line per occupied room, format "<roomId>: <names>",
+    //              rooms ordered by ascending integer ID, names ordered
+    //              lexicographically (ordinal / ASCII order).
     // ──────────────────────────────────────────────────────────────────
     private static void RunQueryS(List<LogEvent> history)
     {
@@ -191,11 +190,15 @@ class Program
 
         var employees = people.Values
             .Where(p => p.Type == EPersonType.Employee && p.InGallery)
-            .Select(p => p.Name).OrderBy(n => n).ToList();
+            .Select(p => p.Name)
+            .OrderBy(n => n, StringComparer.Ordinal)
+            .ToList();
 
         var guests = people.Values
             .Where(p => p.Type == EPersonType.Guest && p.InGallery)
-            .Select(p => p.Name).OrderBy(n => n).ToList();
+            .Select(p => p.Name)
+            .OrderBy(n => n, StringComparer.Ordinal)
+            .ToList();
 
         Console.WriteLine(string.Join(",", employees));
         Console.WriteLine(string.Join(",", guests));
@@ -213,15 +216,16 @@ class Program
         }
 
         foreach (var roomId in rooms.Keys.OrderBy(r => r))
-            Console.WriteLine($"{roomId}: {string.Join(",", rooms[roomId].OrderBy(n => n))}");
+            Console.WriteLine($"{roomId}: {string.Join(",", rooms[roomId].OrderBy(n => n, StringComparer.Ordinal))}");
     }
 
     // ──────────────────────────────────────────────────────────────────
     // RunQueryR  (-R -E/-G <name>)
     //
-    // Prints all rooms visited by the specified person in chronological
-    // order, including repeated visits. If the person doesn't exist,
-    // prints nothing.
+    // Prints all rooms ever entered by the specified person, in
+    // chronological (arrival) order, including repeated visits across
+    // multiple gallery sessions. Prints nothing if the person has never
+    // entered any room or does not appear in the log at all.
     // ──────────────────────────────────────────────────────────────────
     private static void RunQueryR(List<LogEvent> history, string personType, string personName)
     {
@@ -235,23 +239,23 @@ class Program
 
         if (rooms.Count > 0)
             Console.WriteLine(string.Join(",", rooms));
-        // If person not found or never entered a room: print nothing
     }
 
     // ──────────────────────────────────────────────────────────────────
     // RunQueryI  (-I -E/-G <name> [...])
     //
-    // Prints the rooms that were occupied by ALL specified people at the
-    // same time over the complete history. Room IDs printed in ascending
-    // numerical order. If no such room exists, prints nothing.
-    // People not in the log are ignored.
+    // Prints the rooms that were occupied simultaneously by every one of
+    // the specified people at some point in the log's history. Room IDs
+    // are printed in ascending numerical order. People who never appear
+    // in the log are silently ignored. Prints nothing if no room ever
+    // contained all of them at the same time.
     // ──────────────────────────────────────────────────────────────────
     private static void RunQueryI(List<LogEvent> history, List<(string Type, string Name)> people)
     {
         if (people.Count == 0) return;
 
-        // For each person, build a list of (roomId, enterTime, leaveTime) intervals
-        // leaveTime = null means they are still in the room
+        // Build a list of (roomId, enterTime, leaveTime) intervals for each person.
+        // leaveTime == null means the person is still in the room at the end of the log.
         var intervals = new Dictionary<string, List<(int RoomId, int Enter, int? Leave)>>();
 
         foreach (var (type, name) in people)
@@ -279,30 +283,28 @@ class Program
                 }
             }
 
-            // Still in the room at end of log
+            // Person was still in the room when the log ended.
             if (currentRoom.HasValue)
                 intervals[key].Add((currentRoom.Value, enterTime, null));
         }
 
-        // Find all rooms where all people overlapped at the same time
+        // For each room visited by at least one person, check whether all
+        // specified people were present simultaneously at some point.
         var sharedRooms = new HashSet<int>();
 
-        // Collect all unique rooms from all people
         var allRooms = intervals.Values
             .SelectMany(list => list.Select(i => i.RoomId))
             .Distinct();
 
         foreach (int roomId in allRooms)
         {
-            // Check if every specified person has at least one interval in this room
-            // that overlaps with at least one interval of every other person
-            bool allInRoom = people.All(p =>
+            // Skip rooms that not every person has visited.
+            bool allVisited = people.All(p =>
                 intervals[p.Name + p.Type].Any(i => i.RoomId == roomId));
+            if (!allVisited) continue;
 
-            if (!allInRoom) continue;
-
-            // Check if there's a common time where ALL were in this room simultaneously
-            // Get all intervals for this room per person
+            // Collect each person's intervals in this room and check for
+            // a common time window using recursive interval intersection.
             var perPerson = people
                 .Select(p => intervals[p.Name + p.Type]
                     .Where(i => i.RoomId == roomId).ToList())
@@ -319,10 +321,14 @@ class Program
     // ──────────────────────────────────────────────────────────────────
     // CheckOverlap
     //
-    // Recursively checks if there's a common time window across all
-    // people's intervals in a given room.
+    // Recursively intersects time windows across all people's intervals
+    // in a given room. Returns true if there exists a non-empty window
+    // during which every person was simultaneously present.
+    //
+    // personIndex — index of the person being processed in this call.
+    // windowStart / windowEnd — the intersection window accumulated so far.
     // ──────────────────────────────────────────────────────────────────
-    static bool CheckOverlap(
+    private static bool CheckOverlap(
         List<List<(int RoomId, int Enter, int? Leave)>> perPerson,
         int personIndex, int windowStart, int windowEnd)
     {
@@ -345,10 +351,12 @@ class Program
     // ──────────────────────────────────────────────────────────────────
     // BuildCurrentState
     //
-    // Replays all events and returns a dictionary of Person objects
-    // representing the current state of the gallery.
+    // Replays every event in the log and returns a snapshot of the
+    // gallery at the time of the last recorded event. The dictionary
+    // key is "<name><personType>" (e.g. "AliceE") to keep employees
+    // and guests with the same name as distinct entities.
     // ──────────────────────────────────────────────────────────────────
-    static Dictionary<string, Person> BuildCurrentState(List<LogEvent> history)
+    private static Dictionary<string, Person> BuildCurrentState(List<LogEvent> history)
     {
         var people = new Dictionary<string, Person>();
 
@@ -361,35 +369,41 @@ class Program
                 EPersonType pt = evt.PersonType switch {
                     "E" => EPersonType.Employee,
                     "G" => EPersonType.Guest,
-                    _   => throw new InvalidOperationException()
+                    _   => throw new InvalidCommandException()
                 };
                 people[key] = new Person(evt.Name, pt);
             }
 
             var person = people[key];
 
-            if      (evt.Action == "A" && evt.RoomId == null) { person.InGallery = true;  person.CurrentRoom = null; }
-            else if (evt.Action == "L" && evt.RoomId == null) { person.InGallery = false; person.CurrentRoom = null; }
-            else if (evt.Action == "A" && evt.RoomId != null) { person.CurrentRoom = evt.RoomId; }
-            else if (evt.Action == "L" && evt.RoomId != null) { person.CurrentRoom = null; }
+            if      (evt.Action == "A" && evt.RoomId == null) { person.InGallery = true;  person.CurrentRoom = null;       }
+            else if (evt.Action == "L" && evt.RoomId == null) { person.InGallery = false; person.CurrentRoom = null;       }
+            else if (evt.Action == "A" && evt.RoomId != null) { person.CurrentRoom = evt.RoomId;                           }
+            else if (evt.Action == "L" && evt.RoomId != null) { person.CurrentRoom = null;                                 }
         }
 
         return people;
     }
 
     // ──────────────────────────────────────────────────────────────────
-    // InvalidExit — prints "invalid" and exits with code 111
+    // InvalidExit
+    //
+    // Prints "invalid" to stdout and exits with code 111.
     // ──────────────────────────────────────────────────────────────────
-    static void InvalidExit()
+    private static void InvalidExit()
     {
         Console.WriteLine("invalid");
         Environment.Exit(111);
     }
 }
 
-// ================================================================
-//  ParsedArgs — resultado do ProcessArgs
-// ================================================================
+// ════════════════════════════════════════════════════════════════════
+//  ParsedArgs
+//
+//  Immutable record that carries the validated result of ProcessArgs.
+//  Passed directly to the query methods so they receive only what they
+//  need without re-parsing the command line.
+// ════════════════════════════════════════════════════════════════════
 public record ParsedArgs(
     string  Token,
     string  LogPath,
