@@ -2,39 +2,46 @@
 
 public class GalleryState
 {
-    public int LastTimestamp { get; private set; } = -1;
+    public int? LastTimestamp { get; private set; } = null;
     public Dictionary<string, Person> People { get; } = new();
 
     public void ApplyEvent(int timestamp, string name, EPersonType type, bool isArrival, int? roomId)
     {
-       // Invoking logappend with an event whose timestamp is prior to the most recent event already recorded is an error
-       if (timestamp <= LastTimestamp)
+       if (LastTimestamp.HasValue && timestamp <= LastTimestamp.Value)
        {
            throw new InvalidCommandException("Time must increase.");
-       }
-
+       }   
+       
        LastTimestamp = timestamp;
 
         string personId = $"{type}_{name}";
-        if (!People.ContainsKey(personId))
+        if (!People.TryGetValue(personId, out Person? p))
         {
-            People[personId] = new Person(name, type);
+            p = new Person(name, type);
+            People[personId] = p;
         }
         
-        Person p = People[personId];
-
         if (isArrival) 
         {
             if (roomId == null) // Arriving at gallery
             {
-                if (p.InGallery) throw new InvalidCommandException("Already in the gallery.");
+                if (p.InGallery)
+                {
+                    throw new InvalidCommandException("Already in the gallery.");
+                }
                 p.InGallery = true;
             }
             else // Arriving at room
             {
-                if (!p.InGallery) throw new InvalidCommandException("Must enter gallery first.");
-                if (p.CurrentRoom != null) throw new InvalidCommandException("Must leave previous room first."); 
-                
+                if (!p.InGallery)
+                {
+                    throw new InvalidCommandException("Must enter gallery first.");
+                }
+
+                if (p.CurrentRoom != null)
+                {
+                    throw new InvalidCommandException("Must leave previous room first.");
+                }
                 p.CurrentRoom = roomId;
             }
         }
@@ -46,12 +53,10 @@ public class GalleryState
                 {
                     throw new InvalidCommandException("Not in the gallery.");
                 }
-
                 if (p.CurrentRoom != null)
                 {
                     throw new InvalidCommandException("Must leave current room before leaving gallery.");
                 }
-                
                 p.InGallery = false;
             }
             else // Leaving room
@@ -60,7 +65,6 @@ public class GalleryState
                 {
                     throw new InvalidCommandException("Cannot leave a room you are not currently in.");
                 }
-                
                 p.CurrentRoom = null;
             }
         }
