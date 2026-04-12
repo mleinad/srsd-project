@@ -16,7 +16,7 @@ public class LogParser
     public void AppendEvent(LogEvent evento, string token, string filePath, byte[] previousHmac)
     {
         byte[] entryBytes = SerializeEntry(evento, token, previousHmac);
-        using var fs = new FileStream(filePath, FileMode.Append, FileAccess.Write);
+        using var fs = new FileStream(filePath, FileMode.Append, FileAccess.Write, FileShare.None);
         fs.Write(entryBytes, 0, entryBytes.Length);
     }
 
@@ -39,8 +39,7 @@ public class LogParser
         byte[] prevHmac  = new byte[HmacSize];
         var (_, hmacKey) = DeriveKeys(token);
 
-        using var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read);
-
+        using var fs = new FileStream(filePath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
         while (fs.Position < fs.Length)
         {
             // 1. Read stored HMAC (32 bytes)
@@ -49,8 +48,12 @@ public class LogParser
             // 2. Read payload length (4 bytes)
             byte[] lenBytes  = ReadExact(fs, 4);
             int payloadLen   = BitConverter.ToInt32(lenBytes, 0);
-            if (payloadLen <= 0)
+            
+            //upper bound for payload lenght to avoid bad access
+            if (payloadLen <= 0 || payloadLen > 65_536)
+            {
                 throw new IntegrityViolationException();
+            }
 
             // 3. Read encrypted payload
             byte[] cipherBytes = ReadExact(fs, payloadLen);
