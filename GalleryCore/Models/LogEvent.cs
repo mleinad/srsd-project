@@ -1,3 +1,5 @@
+using System.Text.RegularExpressions;
+
 namespace GalleryCore;
 
 public class LogEvent
@@ -15,7 +17,30 @@ public class LogEvent
     {
         var parts = line.Split(',');
         if (parts.Length != 5)
-            throw new FormatException($"Invalid log line: '{line}'");
+            throw new IntegrityViolationException();
+
+        if (!int.TryParse(parts[0], out int timestamp) || timestamp < 1 || timestamp > 1_073_741_823)
+            throw new IntegrityViolationException();
+
+        string personType = parts[1];
+        if (personType != "E" && personType != "G")
+            throw new IntegrityViolationException();
+
+        string name = parts[2];
+        if (string.IsNullOrEmpty(name) || !Regex.IsMatch(name, @"^[a-zA-Z]+$"))
+            throw new IntegrityViolationException();
+
+        string action = parts[3];
+        if (action != "A" && action != "L")
+            throw new IntegrityViolationException();
+
+        int? roomId = null;
+        if (!string.IsNullOrEmpty(parts[4]))
+        {
+            if (!int.TryParse(parts[4], out int rid) || rid < 0 || rid > 1_073_741_823)
+                throw new IntegrityViolationException();
+            roomId = rid;
+        }
 
         // Validate PersonType
         if (parts[1] is not "E" and not "G")
@@ -45,9 +70,9 @@ public class LogEvent
         return new LogEvent
         {
             Timestamp  = timestamp,
-            PersonType = parts[1],
-            Name       = parts[2],
-            Action     = parts[3],
+            PersonType = personType,
+            Name       = name,
+            Action     = action,
             RoomId     = roomId
         };
     }
