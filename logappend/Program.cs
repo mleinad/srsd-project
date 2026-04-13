@@ -255,7 +255,7 @@ class Program
 
         try
         {
-            parser.AppendEvent(logEvent, token, logPath, lastHmac);
+            parser.AppendEvent(logEvent, token, logPath, lastHmac, history.Count);
         }
         catch (IntegrityViolationException)
         {

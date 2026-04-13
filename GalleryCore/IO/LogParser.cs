@@ -19,7 +19,7 @@ public class LogParser
     private static byte[]? _cachedAesKey;
     private static byte[]? _cachedHmacKey;
 
-    public void AppendEvent(LogEvent evento, string token, string filePath, byte[] previousHmac)
+    public void AppendEvent(LogEvent @event, string token, string filePath, byte[] previousHmac, int currentEntryCount)
     {
         using var fs = new FileStream(filePath, FileMode.OpenOrCreate, FileAccess.Write, FileShare.None);
 
@@ -30,18 +30,31 @@ public class LogParser
         }
         fs.Seek(0, SeekOrigin.End);
 
-        byte[] realEntry = SerializeEntry(evento.Serialize(), token, previousHmac);
+        byte[] realEntry = SerializeEntry(@event.Serialize(), token, previousHmac);
         fs.Write(realEntry, 0, realEntry.Length);
         byte[] lastHmac = ExtractHmac(realEntry);
 
-        int dummyCount = RandomNumberGenerator.GetInt32(0, 3);
+        // Round total entry count up to next power of 2
+        int totalAfterReal = currentEntryCount + 1;
+        int nextPow2       = NextPowerOfTwo(totalAfterReal);
+        int dummyCount     = nextPow2 - totalAfterReal;
+
         for (int d = 0; d < dummyCount; d++)
         {
             string dummyPayload = DummyPrefix + "," + RandomNumberGenerator.GetInt32(0, int.MaxValue);
-            byte[] dummyEntry = SerializeEntry(dummyPayload, token, lastHmac);
+            byte[] dummyEntry   = SerializeEntry(dummyPayload, token, lastHmac);
             fs.Write(dummyEntry, 0, dummyEntry.Length);
             lastHmac = ExtractHmac(dummyEntry);
         }
+    }
+
+    private static int NextPowerOfTwo(int n)
+    {
+        if (n <= 1) return 1;
+        int p = 1;
+        while (p < n)
+            p <<= 1;
+        return p;
     }
 
     public (List<LogEvent> Events, byte[] LastHmac) ReadAllEventsWithHmac(
