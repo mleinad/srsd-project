@@ -71,6 +71,7 @@ class Program
                     break;
             }
         }
+
         if (batchFile != null)
         {
             if (!File.Exists(batchFile))
@@ -182,6 +183,7 @@ class Program
         string? logPath,
         LogParser parser)
     {
+
         if (token == null || timestamp == null || logPath == null)
             throw new InvalidCommandException("Missing required arguments.");
 
@@ -207,7 +209,6 @@ class Program
         int? roomIdInt = null;
         if (roomId != null)
         {
-            // int.TryParse drops leading zeros automatically (e.g. "003" → 3).
             if (!int.TryParse(roomId, out int rid) || rid < 0 || rid > 1_073_741_823)
                 throw new InvalidCommandException("Invalid room ID.");
             roomIdInt = rid;
@@ -215,34 +216,6 @@ class Program
 
         if (!ValidLogPath(logPath))
             throw new InvalidCommandException("Invalid log path.");
-
-        List<LogEvent> history;
-        byte[] lastHmac;
-        try
-        {
-            (history, lastHmac) = parser.ReadAllEventsWithHmac(token, logPath);
-        }
-        catch (IntegrityViolationException)
-        {
-            throw;
-        }
-
-        var state = new GalleryState();
-        foreach (var evt in history)
-        {
-            EPersonType t = evt.PersonType == "E" ? EPersonType.Employee : EPersonType.Guest;
-            state.ApplyEvent(evt.Timestamp, evt.Name, t, evt.Action == "A", evt.RoomId);
-        }
-
-        EPersonType personType = employeeName != null ? EPersonType.Employee : EPersonType.Guest;
-        try
-        {
-            state.ApplyEvent(timestamp.Value, name, personType, arrivalFlag, roomIdInt);
-        }
-        catch (InvalidCommandException ex)
-        {
-            throw new InvalidCommandException(ex.Message);
-        }
 
         var logEvent = new LogEvent
         {
@@ -253,9 +226,21 @@ class Program
             RoomId     = roomIdInt
         };
 
+        EPersonType personType = employeeName != null ? EPersonType.Employee : EPersonType.Guest;
+
         try
         {
-            parser.AppendEvent(logEvent, token, logPath, lastHmac);
+            parser.ValidateAndAppend(logEvent, token, logPath, history =>
+            {
+                var state = new GalleryState();
+                foreach (var evt in history)
+                {
+                    EPersonType t = evt.PersonType == "E" ? EPersonType.Employee : EPersonType.Guest;
+                    state.ApplyEvent(evt.Timestamp, evt.Name, t, evt.Action == "A", evt.RoomId);
+                }
+
+                state.ApplyEvent(timestamp.Value, name, personType, arrivalFlag, roomIdInt);
+            });
         }
         catch (IntegrityViolationException)
         {
