@@ -13,28 +13,41 @@ public class LogParser
 
     private static readonly byte[] MagicHeader = Encoding.ASCII.GetBytes("GLOG");
     private const byte FormatVersion = 1;
-    private const int HeaderSize = 5;
+    private const int SaltSize   = 16;
+    private const int HeaderSize = 5 + SaltSize;
 
     private static string? _cachedToken;
+    private static byte[]? _cachedSalt;    
     private static byte[]? _cachedAesKey;
     private static byte[]? _cachedHmacKey;
-
+    
     public void AppendEvent(LogEvent @event, string token, string filePath, byte[] previousHmac, int currentEntryCount)
     {
-        using var fs = new FileStream(filePath, FileMode.OpenOrCreate, FileAccess.Write, FileShare.None);
+        using var fs = new FileStream(filePath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
 
+        byte[] salt;
         if (fs.Length == 0)
         {
+            // New log — generate fresh random salt and write header
+            salt = RandomNumberGenerator.GetBytes(SaltSize);
             fs.Write(MagicHeader, 0, MagicHeader.Length);
             fs.WriteByte(FormatVersion);
+            fs.Write(salt, 0, salt.Length);
         }
+        else
+        {
+            // Existing log — read salt from header
+            fs.Seek(MagicHeader.Length + 1, SeekOrigin.Begin);  // skip "GLOG" + version
+            salt = new byte[SaltSize];
+            fs.ReadExactly(salt);
+        }
+
         fs.Seek(0, SeekOrigin.End);
 
-        byte[] realEntry = SerializeEntry(@event.Serialize(), token, previousHmac);
+        byte[] realEntry = SerializeEntry(@event.Serialize(), token, previousHmac, salt);
         fs.Write(realEntry, 0, realEntry.Length);
         byte[] lastHmac = ExtractHmac(realEntry);
 
-        // Round total entry count up to next power of 2
         int totalAfterReal = currentEntryCount + 1;
         int nextPow2       = NextPowerOfTwo(totalAfterReal);
         int dummyCount     = nextPow2 - totalAfterReal;
@@ -42,7 +55,7 @@ public class LogParser
         for (int d = 0; d < dummyCount; d++)
         {
             string dummyPayload = DummyPrefix + "," + RandomNumberGenerator.GetInt32(0, int.MaxValue);
-            byte[] dummyEntry   = SerializeEntry(dummyPayload, token, lastHmac);
+            byte[] dummyEntry   = SerializeEntry(dummyPayload, token, lastHmac, salt);
             fs.Write(dummyEntry, 0, dummyEntry.Length);
             lastHmac = ExtractHmac(dummyEntry);
         }
@@ -63,57 +76,50 @@ public class LogParser
         if (!File.Exists(filePath))
             return (new List<LogEvent>(), new byte[HmacSize]);
 
-        var events       = new List<LogEvent>();
-        byte[] prevHmac  = new byte[HmacSize];
-        var (_, hmacKey) = DeriveKeys(token);
+        var events      = new List<LogEvent>();
+        byte[] prevHmac = new byte[HmacSize];
 
         using var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.None);
 
         if (fs.Length < HeaderSize)
             throw new IntegrityViolationException();
 
+        // Verify magic header
         byte[] header = ReadExact(fs, MagicHeader.Length);
         if (!ConstantTimeEquals(header, MagicHeader))
             throw new IntegrityViolationException();
 
+        // Verify version
         int version = fs.ReadByte();
         if (version != FormatVersion)
             throw new IntegrityViolationException();
 
+        // Read salt
+        byte[] salt      = ReadExact(fs, SaltSize);
+        var (_, hmacKey) = DeriveKeys(token, salt);
+
         while (fs.Position < fs.Length)
         {
             byte[] storedHmac = ReadExact(fs, HmacSize);
+            byte[] lenBytes   = ReadExact(fs, 4);
+            int    payloadLen = BitConverter.ToInt32(lenBytes, 0);
 
-            byte[] lenBytes  = ReadExact(fs, 4);
-            int payloadLen   = BitConverter.ToInt32(lenBytes, 0);
-            
             if (payloadLen <= 0 || payloadLen > 65_536)
-            {
                 throw new IntegrityViolationException();
-            }
 
-            byte[] cipherBytes = ReadExact(fs, payloadLen);
-
+            byte[] cipherBytes  = ReadExact(fs, payloadLen);
             byte[] chainInput   = prevHmac.Concat(lenBytes).Concat(cipherBytes).ToArray();
             byte[] expectedHmac = ComputeHMAC(chainInput, hmacKey);
-          
-            if (!ConstantTimeEquals(expectedHmac, storedHmac))
-            {
-                throw new IntegrityViolationException();
-            }
 
-            string plainText = Decrypt(cipherBytes, token);
+            if (!ConstantTimeEquals(expectedHmac, storedHmac))
+                throw new IntegrityViolationException();
+
+            string plainText = Decrypt(cipherBytes, token, salt);
 
             if (!plainText.StartsWith(DummyPrefix))
             {
-                try
-                {
-                    events.Add(LogEvent.Deserialize(plainText));
-                }
-                catch (FormatException)
-                {
-                    throw new IntegrityViolationException();
-                }
+                try   { events.Add(LogEvent.Deserialize(plainText)); }
+                catch (FormatException) { throw new IntegrityViolationException(); }
             }
 
             prevHmac = storedHmac;
@@ -122,43 +128,26 @@ public class LogParser
         return (events, prevHmac);
     }
 
-    public List<LogEvent> ReadAllEvents(string token, string filePath)
+    private static (byte[] aesKey, byte[] hmacKey) DeriveKeys(string token, byte[] salt)
     {
-        var (events, _) = ReadAllEventsWithHmac(token, filePath);
-        return events;
-    }
-
-    public bool ValidateToken(string token, string filePath)
-    {
-        if (!File.Exists(filePath)) return true;
-        try
-        {
-            ReadAllEventsWithHmac(token, filePath);
-            return true;
-        }
-        catch (IntegrityViolationException)
-        {
-            return false;
-        }
-    }
-
-    private static (byte[] aesKey, byte[] hmacKey) DeriveKeys(string token)
-    {
-        if (_cachedToken == token && _cachedAesKey != null && _cachedHmacKey != null)
+        if (_cachedToken  == token        &&
+            _cachedSalt   != null         &&
+            _cachedAesKey != null         &&
+            _cachedHmacKey != null        &&
+            ConstantTimeEquals(_cachedSalt, salt))
             return (_cachedAesKey, _cachedHmacKey);
 
         byte[] tokenBytes = Encoding.UTF8.GetBytes(token);
-
-        byte[] aesKey  = StretchKey(tokenBytes, Encoding.UTF8.GetBytes("GalleryLog_AES_Salt_v1"));
-        byte[] hmacKey = StretchKey(tokenBytes, Encoding.UTF8.GetBytes("GalleryLog_HMAC_Salt_v1"));
+        byte[] aesKey     = StretchKey(tokenBytes, salt.Concat(Encoding.UTF8.GetBytes("GalleryLog_AES_v1")).ToArray());
+        byte[] hmacKey    = StretchKey(tokenBytes, salt.Concat(Encoding.UTF8.GetBytes("GalleryLog_HMAC_v1")).ToArray());
 
         _cachedToken   = token;
+        _cachedSalt    = salt;
         _cachedAesKey  = aesKey;
         _cachedHmacKey = hmacKey;
 
         return (aesKey, hmacKey);
     }
-
     private static byte[] StretchKey(byte[] token, byte[] salt)
     {
         byte[] state;
@@ -182,77 +171,73 @@ public class LogParser
         return state;
     }
 
-    private static byte[] Encrypt(string plainText, string token)
+  private static byte[] Encrypt(string plainText, string token, byte[] salt)
+{
+    var (aesKey, _) = DeriveKeys(token, salt);
+
+    byte[] rawData = Encoding.UTF8.GetBytes(plainText);
+    int paddedLen  = PaddedPlaintextSize;
+    if (rawData.Length >= paddedLen)
+        paddedLen = ((rawData.Length / PaddedPlaintextSize) + 1) * PaddedPlaintextSize;
+
+    byte[] dataWithLength = new byte[4 + paddedLen];
+    BitConverter.GetBytes(rawData.Length).CopyTo(dataWithLength, 0);
+    Array.Copy(rawData, 0, dataWithLength, 4, rawData.Length);
+
+    using var aes       = Aes.Create();
+    aes.Key             = aesKey;
+    aes.GenerateIV();
+    byte[] iv           = aes.IV;
+
+    using var ms        = new MemoryStream();
+    using var encryptor = aes.CreateEncryptor();
+    using var cs        = new CryptoStream(ms, encryptor, CryptoStreamMode.Write);
+    cs.Write(dataWithLength, 0, dataWithLength.Length);
+    cs.FlushFinalBlock();
+    byte[] cipherText = ms.ToArray();
+
+    byte[] result = new byte[iv.Length + cipherText.Length];
+    Array.Copy(iv, 0, result, 0, iv.Length);
+    Array.Copy(cipherText, 0, result, iv.Length, cipherText.Length);
+    return result;
+}
+
+private static string Decrypt(byte[] data, string token, byte[] salt)
+{
+    if (data.Length < IvSize + 1)
+        throw new IntegrityViolationException();
+
+    var (aesKey, _) = DeriveKeys(token, salt);
+
+    byte[] iv         = new byte[IvSize];
+    byte[] cipherText = new byte[data.Length - IvSize];
+    Array.Copy(data, 0, iv, 0, IvSize);
+    Array.Copy(data, IvSize, cipherText, 0, cipherText.Length);
+
+    using var aes = Aes.Create();
+    aes.Key       = aesKey;
+    aes.IV        = iv;
+
+    byte[] plainBytes;
+    try
     {
-        var (aesKey, _) = DeriveKeys(token);
-
-        byte[] rawData = Encoding.UTF8.GetBytes(plainText);
-        int paddedLen = PaddedPlaintextSize;
-        if (rawData.Length >= paddedLen)
-            paddedLen = ((rawData.Length / PaddedPlaintextSize) + 1) * PaddedPlaintextSize;
-
-        byte[] dataWithLength = new byte[4 + paddedLen];
-        BitConverter.GetBytes(rawData.Length).CopyTo(dataWithLength, 0);
-        Array.Copy(rawData, 0, dataWithLength, 4, rawData.Length);
-
-        using var aes = Aes.Create();
-        aes.Key = aesKey;
-        aes.GenerateIV();
-        byte[] iv = aes.IV;
-
-        using var ms        = new MemoryStream();
-        using var encryptor = aes.CreateEncryptor();
-        using var cs        = new CryptoStream(ms, encryptor, CryptoStreamMode.Write);
-        cs.Write(dataWithLength, 0, dataWithLength.Length);
-        cs.FlushFinalBlock();
-        byte[] cipherText = ms.ToArray();
-
-        byte[] result = new byte[iv.Length + cipherText.Length];
-        Array.Copy(iv, 0, result, 0, iv.Length);
-        Array.Copy(cipherText, 0, result, iv.Length, cipherText.Length);
-        return result;
+        using var ms        = new MemoryStream(cipherText);
+        using var decryptor = aes.CreateDecryptor();
+        using var cs        = new CryptoStream(ms, decryptor, CryptoStreamMode.Read);
+        using var output    = new MemoryStream();
+        cs.CopyTo(output);
+        plainBytes = output.ToArray();
     }
+    catch (CryptographicException) { throw new IntegrityViolationException(); }
 
-    private static string Decrypt(byte[] data, string token)
-    {
-        if (data.Length < IvSize + 1)
-            throw new IntegrityViolationException();
+    if (plainBytes.Length < 4) throw new IntegrityViolationException();
 
-        var (aesKey, _) = DeriveKeys(token);
+    int actualLen = BitConverter.ToInt32(plainBytes, 0);
+    if (actualLen <= 0 || actualLen > plainBytes.Length - 4)
+        throw new IntegrityViolationException();
 
-        byte[] iv         = new byte[IvSize];
-        byte[] cipherText = new byte[data.Length - IvSize];
-        Array.Copy(data, 0, iv, 0, IvSize);
-        Array.Copy(data, IvSize, cipherText, 0, cipherText.Length);
-
-        using var aes = Aes.Create();
-        aes.Key = aesKey;
-        aes.IV  = iv;
-
-        byte[] plainBytes;
-        try
-        {
-            using var ms        = new MemoryStream(cipherText);
-            using var decryptor = aes.CreateDecryptor();
-            using var cs        = new CryptoStream(ms, decryptor, CryptoStreamMode.Read);
-            using var output    = new MemoryStream();
-            cs.CopyTo(output);
-            plainBytes = output.ToArray();
-        }
-        catch (CryptographicException)
-        {
-            throw new IntegrityViolationException();
-        }
-
-        if (plainBytes.Length < 4)
-            throw new IntegrityViolationException();
-
-        int actualLen = BitConverter.ToInt32(plainBytes, 0);
-        if (actualLen <= 0 || actualLen > plainBytes.Length - 4)
-            throw new IntegrityViolationException();
-
-        return Encoding.UTF8.GetString(plainBytes, 4, actualLen);
-    }
+    return Encoding.UTF8.GetString(plainBytes, 4, actualLen);
+}
 
     private static byte[] ComputeHMAC(byte[] data, byte[] hmacKey)
     {
@@ -269,10 +254,10 @@ public class LogParser
         return diff == 0;
     }
 
-    private static byte[] SerializeEntry(string plainText, string token, byte[] previousHmac)
+    private static byte[] SerializeEntry(string plainText, string token, byte[] previousHmac, byte[] salt)
     {
-        var (_, hmacKey)   = DeriveKeys(token);
-        byte[] cipherBytes = Encrypt(plainText, token);
+        var (_, hmacKey)   = DeriveKeys(token, salt);
+        byte[] cipherBytes = Encrypt(plainText, token, salt);
         byte[] lenBytes    = BitConverter.GetBytes(cipherBytes.Length);
 
         byte[] chainInput = previousHmac.Concat(lenBytes).Concat(cipherBytes).ToArray();
