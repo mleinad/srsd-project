@@ -71,8 +71,6 @@ class Program
                     break;
             }
         }
-
-        // ── Batch mode ────────────────────────────────────────────────
         if (batchFile != null)
         {
             if (!File.Exists(batchFile))
@@ -102,15 +100,6 @@ class Program
         }
     }
 
-    // ──────────────────────────────────────────────────────────────────
-    // RunBatch
-    //
-    // Processes each line of the batch file as an independent logappend
-    // command. Blank lines are silently skipped. If a line is invalid
-    // (wrong arguments, business logic violation, wrong token, etc.),
-    // "invalid" is printed for that line and processing continues with
-    // the next one. The overall exit code is always 0.
-    // ──────────────────────────────────────────────────────────────────
     private static void RunBatch(string batchFile)
     {
         var parser = new LogParser();
@@ -143,12 +132,6 @@ class Program
         }
     }
 
-    // ──────────────────────────────────────────────────────────────────
-    // ProcessCommand
-    //
-    // Parses a single command line coming from a batch file and delegates
-    // to ValidateAndAppend.
-    // ──────────────────────────────────────────────────────────────────
     private static void ProcessCommand(string[] args, LogParser parser)
     {
         string? token         = null;
@@ -188,25 +171,6 @@ class Program
                           arrivalFlag, departureFlag, roomId, logPath, parser);
     }
 
-    // ──────────────────────────────────────────────────────────────────
-    // ValidateAndAppend
-    //
-    // Central validation and append pipeline. Executed for every event,
-    // whether it comes from a direct invocation or from a batch file.
-    //
-    // Steps:
-    //   1. Check that all mandatory arguments are present.
-    //   2. Validate the format of each argument (token, name, roomId, path).
-    //   3. Read the existing log in a single pass, validating the HMAC
-    //      chain and obtaining both the event history and the last HMAC
-    //      needed for chaining the new entry.
-    //   4. Replay the event history to reconstruct the current gallery
-    //      state and verify that the new event is logically consistent.
-    //   5. Append the new entry to the log using the last HMAC.
-    //
-    // Throws InvalidCommandException for argument/logic errors, and
-    // re-throws IntegrityViolationException for token or tamper failures.
-    // ──────────────────────────────────────────────────────────────────
     static void ValidateAndAppend(
         string? token,
         int?    timestamp,
@@ -218,7 +182,6 @@ class Program
         string? logPath,
         LogParser parser)
     {
-        // ── Step 1: mandatory arguments ───────────────────────────────
         if (token == null || timestamp == null || logPath == null)
             throw new InvalidCommandException("Missing required arguments.");
 
@@ -231,7 +194,6 @@ class Program
         if (employeeName != null && guestName != null)
             throw new InvalidCommandException("Cannot specify both -E and -G.");
 
-        // ── Step 2: format validation ─────────────────────────────────
         if (!ValidToken(token))
             throw new InvalidCommandException("Invalid token.");
 
@@ -254,7 +216,6 @@ class Program
         if (!ValidLogPath(logPath))
             throw new InvalidCommandException("Invalid log path.");
 
-        // ── Step 3: single-pass read ──────────────────────────────────
         List<LogEvent> history;
         byte[] lastHmac;
         try
@@ -266,7 +227,6 @@ class Program
             throw;
         }
 
-        // ── Step 4: business logic validation ────────────────────────
         var state = new GalleryState();
         foreach (var evt in history)
         {
@@ -284,7 +244,6 @@ class Program
             throw new InvalidCommandException(ex.Message);
         }
 
-        // ── Step 5: append ────────────────────────────────────────────
         var logEvent = new LogEvent
         {
             Timestamp  = timestamp.Value,
@@ -308,21 +267,9 @@ class Program
         }
     }
 
-    // ──────────────────────────────────────────────────────────────────
-    // ValidToken
-    //
-    // A valid token is a non-empty string of alphanumeric characters
-    // only (a-z, A-Z, 0-9). Special characters are not permitted.
-    // ──────────────────────────────────────────────────────────────────
     private static bool ValidToken(string t)
         => !string.IsNullOrEmpty(t) && Regex.IsMatch(t, @"^[a-zA-Z0-9]+$");
 
-    // ──────────────────────────────────────────────────────────────────
-    // ValidLogPath
-    //
-    // Validates only the filename component of the path, not the
-    // directory part.
-    // ──────────────────────────────────────────────────────────────────
     private static bool ValidLogPath(string path)
     {
         if (string.IsNullOrEmpty(path)) return false;
@@ -331,13 +278,6 @@ class Program
         return Regex.IsMatch(fileName, @"^[a-zA-Z0-9_.]+$");
     }
 
-    // ──────────────────────────────────────────────────────────────────
-    // InvalidExit
-    //
-    // Prints "invalid" to stdout and exits with code 111, as required
-    // by the spec for any malformed, contradictory, or inconsistent
-    // invocation of logappend.
-    // ──────────────────────────────────────────────────────────────────
     private static void InvalidExit()
     {
         Console.WriteLine("invalid");

@@ -20,14 +20,7 @@ class Program
         }
 
         var parser = new LogParser();
-
-        if (!parser.ValidateToken(parsed.Token, parsed.LogPath))
-        {
-            Console.WriteLine("integrity violation");
-            Environment.Exit(111);
-            return;
-        }
-
+        
         List<LogEvent> history;
         try
         {
@@ -36,7 +29,7 @@ class Program
                 InvalidExit();
                 return;
             }
-            history = parser.ReadAllEvents(parsed.Token, parsed.LogPath);
+            (history, _) = parser.ReadAllEventsWithHmac(parsed.Token, parsed.LogPath);
         }
         catch (IntegrityViolationException)
         {
@@ -45,7 +38,6 @@ class Program
             return;
         }
        
-        //Extra layer of validation, checks deserialized events for logical consistency 
         try
         {
             var state = new GalleryState();
@@ -80,13 +72,6 @@ class Program
             RunQueryI(history, parsed.QueryIList);
     }
 
-    // ──────────────────────────────────────────────────────────────────
-    // ProcessArgs
-    //
-    // Parses and validates all command-line arguments for logread.
-    // Throws InvalidCommandException on any invalid or contradictory
-    // combination so that Main can catch it and call InvalidExit().
-    // ──────────────────────────────────────────────────────────────────
     private static ParsedArgs ProcessArgs(string[] args)
     {
         string? token      = null;
@@ -194,20 +179,23 @@ class Program
         if (queryS && personType != null)
             throw new InvalidCommandException();
 
+        if (personName != null && !Regex.IsMatch(personName, @"^[a-zA-Z]+$"))
+            throw new InvalidCommandException();
+
+        foreach (var (_, name) in queryIList)
+        {
+            if (string.IsNullOrEmpty(name) || !Regex.IsMatch(name, @"^[a-zA-Z]+$"))
+                throw new InvalidCommandException();
+        }
+
+        string logFileName = Path.GetFileName(logPath);
+        if (string.IsNullOrEmpty(logFileName) || !Regex.IsMatch(logFileName, @"^[a-zA-Z0-9_.]+$"))
+            throw new InvalidCommandException();
+
         return new ParsedArgs(token, logPath, queryS, queryR, queryI,
                               personType, personName, queryIList);
     }
 
-    // ──────────────────────────────────────────────────────────────────
-    // RunQueryS  (-S)
-    //
-    // Prints the current state of the gallery to stdout:
-    //   Line 1 — comma-separated list of employees currently inside.
-    //   Line 2 — comma-separated list of guests currently inside.
-    //   Lines 3+ — one line per occupied room, format "<roomId>: <names>",
-    //              rooms ordered by ascending integer ID, names ordered
-    //              lexicographically (ordinal / ASCII order).
-    // ──────────────────────────────────────────────────────────────────
     private static void RunQueryS(List<LogEvent> history)
     {
         var people = BuildCurrentState(history);
@@ -243,14 +231,6 @@ class Program
             Console.WriteLine($"{roomId}: {string.Join(",", rooms[roomId].OrderBy(n => n, StringComparer.Ordinal))}");
     }
 
-    // ──────────────────────────────────────────────────────────────────
-    // RunQueryR  (-R -E/-G <name>)
-    //
-    // Prints all rooms ever entered by the specified person, in
-    // chronological (arrival) order, including repeated visits across
-    // multiple gallery sessions. Prints nothing if the person has never
-    // entered any room or does not appear in the log at all.
-    // ──────────────────────────────────────────────────────────────────
     private static void RunQueryR(List<LogEvent> history, string personType, string personName)
     {
         var rooms = history
@@ -265,15 +245,6 @@ class Program
             Console.WriteLine(string.Join(",", rooms));
     }
 
-    // ──────────────────────────────────────────────────────────────────
-    // RunQueryI  (-I -E/-G <name> [...])
-    //
-    // Prints the rooms that were occupied simultaneously by every one of
-    // the specified people at some point in the log's history. Room IDs
-    // are printed in ascending numerical order. People who never appear
-    // in the log are silently ignored. Prints nothing if no room ever
-    // contained all of them at the same time.
-    // ──────────────────────────────────────────────────────────────────
     private static void RunQueryI(List<LogEvent> history, List<(string Type, string Name)> people)
     {
         if (people.Count == 0) return;
@@ -342,16 +313,6 @@ class Program
             Console.WriteLine(string.Join(",", sharedRooms.OrderBy(r => r)));
     }
 
-    // ──────────────────────────────────────────────────────────────────
-    // CheckOverlap
-    //
-    // Recursively intersects time windows across all people's intervals
-    // in a given room. Returns true if there exists a non-empty window
-    // during which every person was simultaneously present.
-    //
-    // personIndex — index of the person being processed in this call.
-    // windowStart / windowEnd — the intersection window accumulated so far.
-    // ──────────────────────────────────────────────────────────────────
     private static bool CheckOverlap(
         List<List<(int RoomId, int Enter, int? Leave)>> perPerson,
         int personIndex, int windowStart, int windowEnd)
@@ -372,14 +333,6 @@ class Program
         return false;
     }
 
-    // ──────────────────────────────────────────────────────────────────
-    // BuildCurrentState
-    //
-    // Replays every event in the log and returns a snapshot of the
-    // gallery at the time of the last recorded event. The dictionary
-    // key is "<name><personType>" (e.g. "AliceE") to keep employees
-    // and guests with the same name as distinct entities.
-    // ──────────────────────────────────────────────────────────────────
     private static Dictionary<string, Person> BuildCurrentState(List<LogEvent> history)
     {
         var people = new Dictionary<string, Person>();
@@ -409,11 +362,6 @@ class Program
         return people;
     }
 
-    // ──────────────────────────────────────────────────────────────────
-    // InvalidExit
-    //
-    // Prints "invalid" to stdout and exits with code 111.
-    // ──────────────────────────────────────────────────────────────────
     private static void InvalidExit()
     {
         Console.WriteLine("invalid");
@@ -421,13 +369,6 @@ class Program
     }
 }
 
-// ════════════════════════════════════════════════════════════════════
-//  ParsedArgs
-//
-//  Immutable record that carries the validated result of ProcessArgs.
-//  Passed directly to the query methods so they receive only what they
-//  need without re-parsing the command line.
-// ════════════════════════════════════════════════════════════════════
 public record ParsedArgs(
     string  Token,
     string  LogPath,

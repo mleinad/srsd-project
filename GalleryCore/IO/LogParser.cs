@@ -5,30 +5,45 @@ namespace GalleryCore.IO;
 
 public class LogParser
 {
-    private const int HmacSize = 32;  // HMAC-SHA256 → 32 bytes
+    private const int HmacSize = 32;
+    private const int IvSize   = 16;
+    private const int PaddedPlaintextSize = 256;
+    private const int KdfIterations = 100_000;
+    private const string DummyPrefix = "DUMMY";
 
-    // ------------------------------------------------------------------
-    // AppendEvent  — O(n) true single pass
-    //
-    // Accepts the lastHmac already computed by ReadAllEventsWithHmac,
-    // so no second file scan is needed. Just serializes and writes.
-    // ------------------------------------------------------------------
+    private static readonly byte[] MagicHeader = Encoding.ASCII.GetBytes("GLOG");
+    private const byte FormatVersion = 1;
+    private const int HeaderSize = 5;
+
+    private static string? _cachedToken;
+    private static byte[]? _cachedAesKey;
+    private static byte[]? _cachedHmacKey;
+
     public void AppendEvent(LogEvent evento, string token, string filePath, byte[] previousHmac)
     {
-        byte[] entryBytes = SerializeEntry(evento, token, previousHmac);
-        using var fs = new FileStream(filePath, FileMode.Append, FileAccess.Write, FileShare.None);
-        fs.Write(entryBytes, 0, entryBytes.Length);
+        using var fs = new FileStream(filePath, FileMode.OpenOrCreate, FileAccess.Write, FileShare.None);
+
+        if (fs.Length == 0)
+        {
+            fs.Write(MagicHeader, 0, MagicHeader.Length);
+            fs.WriteByte(FormatVersion);
+        }
+        fs.Seek(0, SeekOrigin.End);
+
+        byte[] realEntry = SerializeEntry(evento.Serialize(), token, previousHmac);
+        fs.Write(realEntry, 0, realEntry.Length);
+        byte[] lastHmac = ExtractHmac(realEntry);
+
+        int dummyCount = RandomNumberGenerator.GetInt32(0, 3);
+        for (int d = 0; d < dummyCount; d++)
+        {
+            string dummyPayload = DummyPrefix + "," + RandomNumberGenerator.GetInt32(0, int.MaxValue);
+            byte[] dummyEntry = SerializeEntry(dummyPayload, token, lastHmac);
+            fs.Write(dummyEntry, 0, dummyEntry.Length);
+            lastHmac = ExtractHmac(dummyEntry);
+        }
     }
 
-    // ------------------------------------------------------------------
-    // ReadAllEventsWithHmac  — O(n) single pass, public
-    //
-    // Returns (events, lastHmac).
-    // Validates every HMAC in the chain. Throws IntegrityViolationException
-    // on any tampering. Throws FileNotFoundException if file missing.
-    //
-    // For a new (non-existent) log, returns (empty list, zero bytes).
-    // ------------------------------------------------------------------
     public (List<LogEvent> Events, byte[] LastHmac) ReadAllEventsWithHmac(
         string token, string filePath)
     {
@@ -39,26 +54,33 @@ public class LogParser
         byte[] prevHmac  = new byte[HmacSize];
         var (_, hmacKey) = DeriveKeys(token);
 
-        using var fs = new FileStream(filePath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+        using var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.None);
+
+        if (fs.Length < HeaderSize)
+            throw new IntegrityViolationException();
+
+        byte[] header = ReadExact(fs, MagicHeader.Length);
+        if (!ConstantTimeEquals(header, MagicHeader))
+            throw new IntegrityViolationException();
+
+        int version = fs.ReadByte();
+        if (version != FormatVersion)
+            throw new IntegrityViolationException();
+
         while (fs.Position < fs.Length)
         {
-            // 1. Read stored HMAC (32 bytes)
             byte[] storedHmac = ReadExact(fs, HmacSize);
 
-            // 2. Read payload length (4 bytes)
             byte[] lenBytes  = ReadExact(fs, 4);
             int payloadLen   = BitConverter.ToInt32(lenBytes, 0);
             
-            //upper bound for payload lenght to avoid bad access
             if (payloadLen <= 0 || payloadLen > 65_536)
             {
                 throw new IntegrityViolationException();
             }
 
-            // 3. Read encrypted payload
             byte[] cipherBytes = ReadExact(fs, payloadLen);
 
-            // 4. Verify HMAC chain
             byte[] chainInput   = prevHmac.Concat(lenBytes).Concat(cipherBytes).ToArray();
             byte[] expectedHmac = ComputeHMAC(chainInput, hmacKey);
           
@@ -67,17 +89,18 @@ public class LogParser
                 throw new IntegrityViolationException();
             }
 
-            // 5. Decrypt and validate event fields
             string plainText = Decrypt(cipherBytes, token);
-            
-            //Validate serialization for format integrity aswell
-            try
+
+            if (!plainText.StartsWith(DummyPrefix))
             {
-                events.Add(LogEvent.Deserialize(plainText.Trim()));
-            }
-            catch (FormatException)
-            {
-                throw new IntegrityViolationException();
+                try
+                {
+                    events.Add(LogEvent.Deserialize(plainText));
+                }
+                catch (FormatException)
+                {
+                    throw new IntegrityViolationException();
+                }
             }
 
             prevHmac = storedHmac;
@@ -86,18 +109,12 @@ public class LogParser
         return (events, prevHmac);
     }
 
-    // ------------------------------------------------------------------
-    // ReadAllEvents  — convenience wrapper for logread
-    // ------------------------------------------------------------------
     public List<LogEvent> ReadAllEvents(string token, string filePath)
     {
         var (events, _) = ReadAllEventsWithHmac(token, filePath);
         return events;
     }
 
-    // ------------------------------------------------------------------
-    // ValidateToken  — O(n) single pass
-    // ------------------------------------------------------------------
     public bool ValidateToken(string token, string filePath)
     {
         if (!File.Exists(filePath)) return true;
@@ -112,23 +129,58 @@ public class LogParser
         }
     }
 
-    // ------------------------------------------------------------------
-    // DeriveKeys — AES-256 key + HMAC key from token via SHA-256
-    // ------------------------------------------------------------------
     private static (byte[] aesKey, byte[] hmacKey) DeriveKeys(string token)
     {
-        byte[] aesKey  = SHA256.HashData(Encoding.UTF8.GetBytes("AES"  + token));
-        byte[] hmacKey = SHA256.HashData(Encoding.UTF8.GetBytes("HMAC" + token));
+        if (_cachedToken == token && _cachedAesKey != null && _cachedHmacKey != null)
+            return (_cachedAesKey, _cachedHmacKey);
+
+        byte[] tokenBytes = Encoding.UTF8.GetBytes(token);
+
+        byte[] aesKey  = StretchKey(tokenBytes, Encoding.UTF8.GetBytes("GalleryLog_AES_Salt_v1"));
+        byte[] hmacKey = StretchKey(tokenBytes, Encoding.UTF8.GetBytes("GalleryLog_HMAC_Salt_v1"));
+
+        _cachedToken   = token;
+        _cachedAesKey  = aesKey;
+        _cachedHmacKey = hmacKey;
+
         return (aesKey, hmacKey);
     }
 
-    // ------------------------------------------------------------------
-    // Encrypt — AES-256-CBC + random IV per entry
-    // Result: [ 16 bytes IV ][ N bytes ciphertext ]
-    // ------------------------------------------------------------------
+    private static byte[] StretchKey(byte[] token, byte[] salt)
+    {
+        byte[] state;
+        using (var sha = SHA256.Create())
+        {
+            sha.TransformBlock(salt, 0, salt.Length, null, 0);
+            sha.TransformFinalBlock(token, 0, token.Length);
+            state = sha.Hash!;
+        }
+
+        for (int i = 1; i <= KdfIterations; i++)
+        {
+            byte[] iterBytes = BitConverter.GetBytes(i);
+            using var sha = SHA256.Create();
+            sha.TransformBlock(state, 0, state.Length, null, 0);
+            sha.TransformBlock(token, 0, token.Length, null, 0);
+            sha.TransformFinalBlock(iterBytes, 0, iterBytes.Length);
+            state = sha.Hash!;
+        }
+
+        return state;
+    }
+
     private static byte[] Encrypt(string plainText, string token)
     {
         var (aesKey, _) = DeriveKeys(token);
+
+        byte[] rawData = Encoding.UTF8.GetBytes(plainText);
+        int paddedLen = PaddedPlaintextSize;
+        if (rawData.Length >= paddedLen)
+            paddedLen = ((rawData.Length / PaddedPlaintextSize) + 1) * PaddedPlaintextSize;
+
+        byte[] dataWithLength = new byte[4 + paddedLen];
+        BitConverter.GetBytes(rawData.Length).CopyTo(dataWithLength, 0);
+        Array.Copy(rawData, 0, dataWithLength, 4, rawData.Length);
 
         using var aes = Aes.Create();
         aes.Key = aesKey;
@@ -138,8 +190,7 @@ public class LogParser
         using var ms        = new MemoryStream();
         using var encryptor = aes.CreateEncryptor();
         using var cs        = new CryptoStream(ms, encryptor, CryptoStreamMode.Write);
-        byte[] data = Encoding.UTF8.GetBytes(plainText);
-        cs.Write(data, 0, data.Length);
+        cs.Write(dataWithLength, 0, dataWithLength.Length);
         cs.FlushFinalBlock();
         byte[] cipherText = ms.ToArray();
 
@@ -149,51 +200,53 @@ public class LogParser
         return result;
     }
 
-    // ------------------------------------------------------------------
-    // Decrypt — [ 16 bytes IV ][ N bytes ciphertext ] → plaintext
-    // ------------------------------------------------------------------
     private static string Decrypt(byte[] data, string token)
     {
-        if (data.Length < 17)
+        if (data.Length < IvSize + 1)
             throw new IntegrityViolationException();
 
         var (aesKey, _) = DeriveKeys(token);
 
-        byte[] iv         = new byte[16];
-        byte[] cipherText = new byte[data.Length - 16];
-        Array.Copy(data, 0, iv, 0, 16);
-        Array.Copy(data, 16, cipherText, 0, cipherText.Length);
+        byte[] iv         = new byte[IvSize];
+        byte[] cipherText = new byte[data.Length - IvSize];
+        Array.Copy(data, 0, iv, 0, IvSize);
+        Array.Copy(data, IvSize, cipherText, 0, cipherText.Length);
 
         using var aes = Aes.Create();
         aes.Key = aesKey;
         aes.IV  = iv;
 
+        byte[] plainBytes;
         try
         {
             using var ms        = new MemoryStream(cipherText);
             using var decryptor = aes.CreateDecryptor();
             using var cs        = new CryptoStream(ms, decryptor, CryptoStreamMode.Read);
-            using var sr        = new StreamReader(cs);
-            return sr.ReadToEnd();
+            using var output    = new MemoryStream();
+            cs.CopyTo(output);
+            plainBytes = output.ToArray();
         }
         catch (CryptographicException)
         {
             throw new IntegrityViolationException();
         }
+
+        if (plainBytes.Length < 4)
+            throw new IntegrityViolationException();
+
+        int actualLen = BitConverter.ToInt32(plainBytes, 0);
+        if (actualLen <= 0 || actualLen > plainBytes.Length - 4)
+            throw new IntegrityViolationException();
+
+        return Encoding.UTF8.GetString(plainBytes, 4, actualLen);
     }
 
-    // ------------------------------------------------------------------
-    // ComputeHMAC — HMAC-SHA256
-    // ------------------------------------------------------------------
     private static byte[] ComputeHMAC(byte[] data, byte[] hmacKey)
     {
         using var hmac = new HMACSHA256(hmacKey);
         return hmac.ComputeHash(data);
     }
 
-    // ------------------------------------------------------------------
-    // ConstantTimeEquals — timing-safe comparison
-    // ------------------------------------------------------------------
     private static bool ConstantTimeEquals(byte[] a, byte[] b)
     {
         if (a.Length != b.Length) return false;
@@ -203,14 +256,10 @@ public class LogParser
         return diff == 0;
     }
 
-    // ------------------------------------------------------------------
-    // SerializeEntry — binary record:
-    // [ 32 bytes HMAC ][ 4 bytes length ][ N bytes encrypted payload ]
-    // ------------------------------------------------------------------
-    private static byte[] SerializeEntry(LogEvent evento, string token, byte[] previousHmac)
+    private static byte[] SerializeEntry(string plainText, string token, byte[] previousHmac)
     {
         var (_, hmacKey)   = DeriveKeys(token);
-        byte[] cipherBytes = Encrypt(evento.Serialize(), token);
+        byte[] cipherBytes = Encrypt(plainText, token);
         byte[] lenBytes    = BitConverter.GetBytes(cipherBytes.Length);
 
         byte[] chainInput = previousHmac.Concat(lenBytes).Concat(cipherBytes).ToArray();
@@ -223,9 +272,13 @@ public class LogParser
         return entry;
     }
 
-    // ------------------------------------------------------------------
-    // ReadExact — reads exactly 'count' bytes; throws on truncation
-    // ------------------------------------------------------------------
+    private static byte[] ExtractHmac(byte[] entry)
+    {
+        byte[] hmac = new byte[HmacSize];
+        Array.Copy(entry, 0, hmac, 0, HmacSize);
+        return hmac;
+    }
+
     private static byte[] ReadExact(FileStream fs, int count)
     {
         byte[] buf   = new byte[count];
